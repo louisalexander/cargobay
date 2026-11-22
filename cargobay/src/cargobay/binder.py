@@ -53,7 +53,15 @@ class Binder:
         self._trays: dict[int, dict] = {}
         self._pending: tuple[int, float] | None = None
         self._lock = asyncio.Lock()
+        self.on_bindings_change: list[Callable[[], None]] = []
         inventory.on_seen.append(self.spool_seen)
+
+    def _bindings_changed(self) -> None:
+        for cb in list(self.on_bindings_change):
+            try:
+                cb()
+            except Exception:
+                log.exception("on_bindings_change callback failed")
 
     # ---- state ------------------------------------------------------------
 
@@ -95,6 +103,7 @@ class Binder:
                     log.info("reconcile: slot %d no longer holds spool %d", slot, spool_id)
                     self.store.clear_binding(slot)
                     self.store.mark_unbound(spool_id, self._clock())
+                    self._bindings_changed()
 
     async def on_change(self, entity_id: str, old: dict | None, new: dict | None) -> None:
         try:
@@ -179,6 +188,7 @@ class Binder:
                       spool_id, slot, e.message)
             written = False
         self.store.set_binding(slot, spool_id)
+        self._bindings_changed()
         await self._fire("cargobay_bound", {
             "slot": slot, "spool_id": spool_id, "short_code": r.short_code,
             "name": f"{r.brand} {r.name}".strip(), "location_written": written})
@@ -202,6 +212,7 @@ class Binder:
             return {"slot": slot, "spool_id": None}
         self.store.clear_binding(slot)
         self.store.mark_unbound(spool_id, self._clock())
+        self._bindings_changed()
         self._pending = None  # a swap restarts the sequence
         await self._fire("cargobay_unbound", {
             "slot": slot, "spool_id": spool_id,

@@ -456,3 +456,15 @@ async def test_manual_unbind_route(rig, api):
     await rig.empty(1)
     assert rig.env.store.bindings() == {}
     assert rig.patches() == [("/my/spools/acmePLA01", {"location": SHELF})]
+
+
+async def test_bindings_change_callback(rig):
+    hits = []
+    rig.binder.on_bindings_change.append(lambda: hits.append(1))
+    rig.binder.on_bindings_change.insert(0, lambda: 1 / 0)  # errors are logged, not raised
+    rig.scan(1)
+    await rig.load(2)
+    assert len(hits) == 1
+    rig.env.now[0] += 10
+    await rig.empty(2)
+    assert len(hits) == 2

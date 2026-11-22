@@ -135,3 +135,22 @@ async def test_network_error(tmp_path):
             await client.list_spools()
     assert e.value.status == 0 and e.value.code == "network"
     assert store.quota().used == 1  # no response, but 3dfp may have counted it
+
+
+async def test_on_quota_called_and_errors_swallowed(env):
+    app, client, *_ = env
+    seen = []
+    client.on_quota.append(lambda n: 1 / 0)
+    client.on_quota.append(seen.append)
+    await client.list_spools()
+    assert seen == [client.quota_remaining()]
+
+
+async def test_no_key_fails_fast_without_network(env):
+    app, _, store, now = env
+    keyless = Client(None, "http://127.0.0.1:1", None, store, clock=lambda: now[0])
+    for call in (keyless.list_spools(), keyless.patch_spool("x", {})):
+        with pytest.raises(ApiError) as e:
+            await call
+        assert (e.value.status, e.value.code) == (0, "no_key")
+    assert app[REQUESTS] == []

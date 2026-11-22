@@ -2,10 +2,14 @@
 
 import asyncio
 import json
+import logging
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 import aiohttp
+
+log = logging.getLogger(__name__)
 
 _TIMEOUT = aiohttp.ClientTimeout(total=8)
 _MONTHLY_QUOTA = 1000
@@ -40,6 +44,7 @@ class Client:
         self._key = key
         self._store = store
         self._clock = clock
+        self.on_quota: list[Callable[[int], None]] = []
 
     def _month(self) -> str:
         return datetime.fromtimestamp(self._clock(), timezone.utc).strftime("%Y-%m")
@@ -62,8 +67,15 @@ class Client:
         except ValueError:
             pass
         self._store.set_quota(month, remaining, q.used + 1, q.warned)
+        for cb in list(self.on_quota):
+            try:
+                cb(self.quota_remaining())
+            except Exception:
+                log.exception("on_quota callback failed")
 
     async def _request(self, method: str, path: str, body: dict | None = None):
+        if not self._key:
+            raise ApiError(0, "no_key", "no 3dfp API key loaded")
         headers = {"Authorization": f"Bearer {self._key}", "Accept": "application/json"}
         try:
             async with self._session.request(
