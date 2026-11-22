@@ -1,6 +1,6 @@
 # Cargo Bay — design
 
-_2026-11-20. Status: draft for approval._
+_2026-11-20. Status: approved 2026-11-21 (owner). §3/§6 updated 2026-11-21 with the `.local` spike result._
 
 Cargo Bay is a bridge that lets an off-the-shelf **SpoolmanScale** (ESP32 filament
 scale with NFC) run against **3dfilamentprofiles.com (3dfp)** as its inventory, and
@@ -81,9 +81,15 @@ The flow we want:
   `filament_id`, `color`, `remain`, `remain_enabled`, `tray_weight`, `name`, `empty`.
   Action `bambu_lab.set_filament(entity_id, tray_info_idx, tray_color RRGGBBAA,
   tray_type, nozzle_temp_min, nozzle_temp_max)`.
-- **HAOS DHCP churn.** The box's LAN IP changes on reboot; the scale's ESP32 HTTP
-  client is not known to resolve `.local`. The scale needs a stable address for the
-  add-on (§6).
+- **HAOS DHCP churn.** The box's LAN IP changes on reboot, so the scale must not be
+  given an IP. **`.local` spike (2026-11-21):** a Freenove ESP32-S3 on SpoolmanScale
+  v0.8.3's exact platform pin (pioarduino 55.03.312-1 → Arduino core 3.3.12, IDF
+  v5.5.5) on the house Eero network: the core ships with
+  `CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y`; `WiFi.hostByName("homeassistant.local")`
+  resolves (≈215 ms cold) and `HTTPClient` `GET http://homeassistant.local:8123/` →
+  200, both with and without an mDNS responder running on the board (the scale runs
+  one by default). The firmware resolves hosts with `WiFi.hostByName`
+  (`src/web/web_access.cpp`). Not yet confirmed on the real WT32-SC01 Plus (§7a M3).
 
 ## 4. Approaches considered
 
@@ -233,8 +239,9 @@ cycle. Shared with `filament_sync.py` (~1 GET + ≤4 PATCH per print).
   Settings → Add-ons → Repositories.
 - Port `7912/tcp` mapped on the host. Options: `api_key` (scale's `X-API-Key`),
   `bind_window_s`, profile overrides. HA access via `homeassistant_api: true`.
-- **Stable address for the scale:** a DHCP reservation for the HAOS box on the Eero
-  (already recommended in CLAUDE.md). Scale base URL `http://<reserved-ip>:7912`.
+- **Stable address for the scale:** base URL `http://homeassistant.local:7912`
+  (mDNS; §3 spike). Fallback if `.local` proves flaky on the real scale: an Eero DHCP
+  reservation for the HAOS box and `http://<reserved-ip>:7912`.
 - Updates: bump `version` in `config.yaml`, push, update in the add-on store.
 
 ## 7. Testing
@@ -257,8 +264,9 @@ cycle. Shared with `filament_sync.py` (~1 GET + ≤4 PATCH per print).
    checker (read-only mode first, then `--write` on two spare spools) and with curl
    standing in for scan/measure; real scan-then-load on a real tray; HA picker PR.
 3. **Hardware** (gated on parts arriving): order list §8, print the enclosure, flash via
-   the SpoolmanScale web flasher, Eero DHCP reservation for HAOS, point the scale at
-   Cargo Bay, end-to-end test. v1 is done only after this.
+   the SpoolmanScale web flasher, point the scale at Cargo Bay on
+   `homeassistant.local:7912` (Eero DHCP reservation only if `.local` is flaky),
+   end-to-end test. v1 is done only after this.
 
 ## 8. Hardware (order list)
 
