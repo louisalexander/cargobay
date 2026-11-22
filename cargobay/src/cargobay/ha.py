@@ -5,7 +5,6 @@ calls ``on_states`` with the fresh states and lets the consumer reconcile.
 """
 
 import asyncio
-import contextlib
 import itertools
 import logging
 import re
@@ -92,7 +91,7 @@ class HA:
         while True:
             authed = False
             try:
-                async with self._session.ws_connect(self._ws_url, heartbeat=30) as ws:
+                async with self._session.ws_connect(self._ws_url, heartbeat=30, max_msg_size=0) as ws:
                     await self._authenticate(ws)
                     authed = True
                     backoff = 1.0
@@ -139,9 +138,19 @@ class HA:
             await reader
         finally:
             self._ws = None
-            for task in (reader, dispatcher):
-                task.cancel()
-            await asyncio.gather(reader, dispatcher, return_exceptions=True)
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            # drop queued, not-yet-started items (reconnect resyncs via on_states) but let a
+            # callback that already started run to completion; shutdown cancels it.
+            while not self._queue.empty():
+                self._queue.get_nowait()
+            self._queue.put_nowait(None)
+            try:
+                await dispatcher
+            except BaseException:
+                dispatcher.cancel()
+                await asyncio.gather(dispatcher, return_exceptions=True)
+                raise
 
     async def _read(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
@@ -180,6 +189,8 @@ class HA:
         # separate task so a callback can itself await call_service without deadlocking the reader
         while True:
             item = await queue.get()
+            if item is None:
+                return
             try:
                 if item[0] == "states":
                     await on_states(item[1])

@@ -188,3 +188,35 @@ async def test_auth_invalid_keeps_retrying_with_backoff():
             await bad.task
         await bad.session.close()
         await bad.server.close()
+
+
+async def test_large_get_states_result_is_accepted(h):
+    for i in range(50):  # ~5 MiB of unrelated entities, above aiohttp's 4 MiB default cap
+        eid = f"sensor.pad_{i}"
+        h.app[fake_ha.STATES][eid] = {"entity_id": eid, "state": "x",
+                                      "attributes": {"blob": "z" * 100_000}}
+    h.start()
+    await wait(h.states_evt)
+    assert sorted(h.states_calls[0]) == sorted(tray_entities)
+
+
+async def test_started_callback_survives_disconnect(h):
+    started, release, finished = asyncio.Event(), asyncio.Event(), []
+
+    async def on_change(entity_id, old, new):
+        started.set()
+        await release.wait()
+        finished.append(entity_id)
+
+    h.task = asyncio.create_task(h.ha.run(h.on_states, on_change))
+    await wait(h.states_evt)
+    await fake_ha.push_change(h.app, TRAY3, None, fake_ha.tray_state(3, "PLA"))
+    await wait(started)
+    await fake_ha.drop_connections(h.app)
+    await asyncio.sleep(0.1)
+    assert finished == []  # still waiting, not cancelled
+    release.set()
+    await asyncio.wait_for(_until(lambda: finished), 5)
+    h.states_evt.clear()
+    await wait(h.states_evt)  # and the client reconnected and resynced afterwards
+    assert len(h.states_calls) == 2
