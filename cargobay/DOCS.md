@@ -19,11 +19,28 @@ bind_window_s: 300
 extra_locations:
   - "Shelf: Office Supply Closet"
 profile_overrides:
-  - filament: "Generic PETG"
-    tray_info_idx: "GFG99"
-    nozzle_temp_min: 230
-    nozzle_temp_max: 260
+  - filament: "Polymaker PLA Matte Black"
+    tray_info_idx: "GFL99"
+    nozzle_temp_min: 200
+    nozzle_temp_max: 230
 ```
+
+### Profile overrides
+
+By default a bound spool gets Bambu's generic profile for its material (PLA ->
+`GFL99` "Generic PLA", PETG -> `GFG99` "Generic PETG", ...). An override replaces that
+for one filament:
+
+- `filament` is matched against the spool's display name, built from the 3dfp fields
+  as `"<brand> <material> <material_type> <color>"` (for example
+  `"Polymaker PLA Matte Black"`). A trailing parenthesised colour code such as
+  `"(10501)"` is dropped, runs of spaces count as one, and the match ignores case.
+  Copy the name exactly as it appears in `spools[].name` of `sensor.cargobay_spools`.
+  A non-matching name is silently unused.
+- `tray_info_idx` is the Bambu filament profile id to set on the tray.
+- `nozzle_temp_min` / `nozzle_temp_max` are optional. When omitted, the temperatures
+  come from the built-in generic table entry for `tray_info_idx`, or, if that id is
+  not in the table, from the generic profile for the spool's material.
 
 ## Scale setup
 
