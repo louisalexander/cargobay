@@ -3,7 +3,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from cargobay.store import Store
 from cargobay.threedfp import ApiError, Client
-from fakes.fake_3dfp import AUTHS, EXTRA, FAIL, REMAINING, REQUESTS, SAMPLE, SPOOLS, make_app
+from fakes.fake_3dfp import AUTHS, EXTRA, FAIL, REQUESTS, SAMPLE, SPOOLS, make_app
 
 
 @pytest.fixture
@@ -57,13 +57,39 @@ async def test_quota_from_header(env):
     assert q.month == "2023-11" and q.used == 1 and q.remaining == 811
 
 
-async def test_quota_without_header_uses_used(env):
-    app, client, store, now = env
-    store.set_quota("2023-10", 5, 900, True)  # stale month
+@pytest.mark.parametrize("env", [{"remaining": None}], indirect=True)
+async def test_no_header_falls_back_to_1000_minus_used(env):
+    _, client, store, _ = env
+    await client.list_spools()
     await client.list_spools()
     q = store.quota()
-    assert q.month == "2023-11" and q.used == 1 and q.warned is False
-    assert client.quota_remaining() == 999  # header 999 from this month
+    assert q.used == 2 and q.remaining is None
+    assert client.quota_remaining() == 998
+
+
+async def test_month_rollover_resets_before_counting(env):
+    _, client, store, now = env
+    store.set_quota("2023-10", 5, 900, True)  # stale month
+    assert client.quota_remaining() == 1000  # nothing used yet this month
+    await client.list_spools()
+    q = store.quota()
+    assert (q.month, q.used, q.warned) == ("2023-11", 1, False)
+    assert q.remaining == 999
+    now[0] = 1_701_388_800.0 + 60  # 2023-12-01 00:01 UTC
+    assert client.quota_remaining() == 1000
+    await client.list_spools()
+    q = store.quota()
+    assert (q.month, q.used, q.remaining, q.warned) == ("2023-12", 1, 998, False)
+
+
+@pytest.mark.parametrize("env", [{"remaining": None}], indirect=True)
+async def test_rollover_without_header_clears_stale_remaining(env):
+    _, client, store, _ = env
+    store.set_quota("2023-10", 5, 900, True)
+    await client.list_spools()
+    q = store.quota()
+    assert (q.month, q.used, q.remaining, q.warned) == ("2023-11", 1, None, False)
+    assert client.quota_remaining() == 999
 
 
 async def test_error_body_parsed_and_counted(env):
@@ -103,7 +129,9 @@ async def test_network_error(tmp_path):
     import aiohttp
 
     async with aiohttp.ClientSession() as session:
-        client = Client(session, "http://127.0.0.1:1", "K", Store(str(tmp_path / "n.db")))
+        store = Store(str(tmp_path / "n.db"))
+        client = Client(session, "http://127.0.0.1:1", "K", store)
         with pytest.raises(ApiError) as e:
             await client.list_spools()
     assert e.value.status == 0 and e.value.code == "network"
+    assert store.quota().used == 1  # no response, but 3dfp may have counted it

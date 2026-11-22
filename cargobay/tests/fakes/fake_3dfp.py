@@ -50,7 +50,7 @@ SAMPLE = [
 ]
 
 
-def make_app(spools: list[dict], remaining: int = 1000) -> web.Application:
+def make_app(spools: list[dict], remaining: int | None = 1000) -> web.Application:
     app = web.Application()
     app[SPOOLS] = copy.deepcopy(spools)
     app[REQUESTS] = []
@@ -72,7 +72,9 @@ def make_app(spools: list[dict], remaining: int = 1000) -> web.Application:
         body = await request.json() if request.can_read_body else None
         app[REQUESTS].append((request.method, request.path, body))
         app[AUTHS].append(request.headers.get("Authorization"))
-        headers = {"X-RateLimit-Remaining": str(app[REMAINING] - len(app[REQUESTS]))}
+        headers = {}
+        if app[REMAINING] is not None:  # None: omit the header
+            headers["X-RateLimit-Remaining"] = str(app[REMAINING] - len(app[REQUESTS]))
         fail = app[FAIL].get(request.path) or app[FAIL].get("*")
         if fail:
             return error(*fail, headers)

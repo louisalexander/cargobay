@@ -73,6 +73,8 @@ class Client:
                 raw = await resp.read()
                 status = resp.status
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # no response, but 3dfp may still have counted it against the quota
+            self._record(None)
             raise ApiError(0, "network", type(e).__name__) from e
         try:
             data = json.loads(raw)
