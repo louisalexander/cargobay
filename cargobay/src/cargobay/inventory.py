@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 LIST_MAX_AGE_S = 6 * 3600
 SCAN_MISS_MIN_GAP_S = 600
+START_FRESH_S = 600  # a snapshot this young is not refreshed on (re)start
 QUOTA_FLOOR = 100
 SLOT_PREFIX = "Printer:"
 FULL_WEIGHT = 1000
@@ -93,14 +94,26 @@ class Inventory:
         self._locks: dict[int, asyncio.Lock] = {}
         self.on_seen: list[Callable[[int], None]] = []
         self.trays: Callable[[], dict[int, dict]] = lambda: {}
+        self._has_snapshot = False
 
     # lifecycle
     async def start(self) -> None:
+        self.load_snapshot()
+        self.initial_refresh()
+
+    def load_snapshot(self) -> None:
         snap = self.store.snapshot()
+        self._has_snapshot = snap is not None
         if snap is not None:
             self._load(snap)
+
+    def initial_refresh(self) -> None:
+        """Startup refresh, skipped when the snapshot is fresh or quota is low."""
+        if self._has_snapshot:
             if self.client.quota_remaining() < QUOTA_FLOOR:
                 return
+            if self._clock() - self.store.snapshot_ts() < START_FRESH_S:
+                return  # a restart (crash loop, option change) must not cost a GET
         self._begin_refresh()
 
     async def refresh_done(self) -> None:
@@ -189,6 +202,14 @@ class Inventory:
                 return i
         return None
 
+    def _refresh_could_match(self, norm: str) -> bool:
+        """A refresh can only help for a tag linked to an uncached spool or a uid
+        shaped like a Bambu tray UUID (a reel 3dfp may have paired since)."""
+        if not norm:
+            return False
+        owner = self.store.tag_owner(norm)
+        return (owner is not None and owner not in self._cache) or len(norm) == 32
+
     def find_by_tag(self, uid: str, allow_archived: bool = False) -> dict | None:
         i = self._match(uid)
         s = self.spool(i) if i is not None else None
@@ -199,7 +220,8 @@ class Inventory:
         """Read-only lookup; archived spools match. A miss may start a bounded refresh."""
         i = self._match(uid)
         if i is None:
-            self.maybe_refresh("scan_miss")
+            if self._refresh_could_match(normalise_uid(uid)):
+                self.maybe_refresh("scan_miss")
             return {"matched_spool_id": None}
         for cb in list(self.on_seen):
             try:

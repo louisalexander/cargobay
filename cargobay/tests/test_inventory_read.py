@@ -132,3 +132,63 @@ async def test_field_list_includes_extra_keys(env):
     env.store.merge_extra(1, {"note": '"x"'})
     keys = [f["key"] for f in env.inventory.field_list()]
     assert keys == ["last_dried", "note"]
+
+
+def _restart(env):
+    store2 = Store(env.db)
+    return store2, Inventory(store2, env.client, env.options, clock=lambda: env.now[0])
+
+
+async def test_restart_with_fresh_snapshot_costs_nothing(env):
+    env.fake[REQUESTS].clear()
+    env.now[0] = T0 + 599  # the fixture refreshed at T0
+    store2, inv2 = _restart(env)
+    await inv2.start()
+    await inv2.refresh_done()
+    assert env.fake[REQUESTS] == [] and len(inv2.spools(True)) == 5
+    store2.close()
+
+
+async def test_restart_with_old_snapshot_refreshes_once(env):
+    env.fake[REQUESTS].clear()
+    env.now[0] = T0 + 601
+    store2, inv2 = _restart(env)
+    await inv2.start()
+    await inv2.refresh_done()
+    assert [(m, p) for m, p, _ in env.fake[REQUESTS]] == [("GET", "/my/spools")]
+    store2.close()
+
+
+async def test_start_without_snapshot_refreshes(env, tmp_path):
+    env.fake[REQUESTS].clear()
+    store2 = Store(str(tmp_path / "fresh.db"))
+    inv2 = Inventory(store2, env.client, env.options, clock=lambda: env.now[0])
+    await inv2.start()
+    await inv2.refresh_done()
+    assert [(m, p) for m, p, _ in env.fake[REQUESTS]] == [("GET", "/my/spools")]
+    store2.close()
+
+
+async def test_restart_quota_low_with_snapshot_costs_nothing(env):
+    env.fake[REQUESTS].clear()
+    env.now[0] = T0 + 10 * H6  # snapshot old: only the quota floor stops the GET
+    q = env.store.quota()
+    env.store.set_quota(q.month, 99, q.used, q.warned)
+    store2, inv2 = _restart(env)
+    assert env.client.quota_remaining() == 99
+    await inv2.start()
+    await inv2.refresh_done()
+    assert env.fake[REQUESTS] == [] and len(inv2.spools(True)) == 5
+    store2.close()
+
+
+async def test_list_refresh_gap_10_min(env):
+    env.fake[REQUESTS].clear()
+    env.now[0] = T0 + H6 + 1  # old snapshot
+    env.inventory.maybe_refresh("list")
+    await env.inventory.refresh_done()
+    env.now[0] += 599
+    env.store.save_snapshot(env.store.snapshot(), 0.0)  # still "old"
+    env.inventory.maybe_refresh("list")
+    await env.inventory.refresh_done()
+    assert len(env.fake[REQUESTS]) == 1

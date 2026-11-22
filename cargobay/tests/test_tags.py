@@ -47,13 +47,32 @@ async def test_scan_matches_archived(cli):
 
 async def test_scan_never_writes_and_miss_refresh_bounded(cli):
     env = cli.env
+    unknown_bambu = "FEDCBA9876543210FEDCBA9876543210"  # may be newly paired in 3dfp
     for _ in range(50):
-        env.now[0] += 9 * 60 / 50
-        assert (await scan(cli, "DEADBEEF")) == {"matched_spool_id": None}
+        env.now[0] += 19 * 60 / 50  # 19 min: only one 10-min gap opens
+        assert (await scan(cli, unknown_bambu)) == {"matched_spool_id": None}
     await env.inventory.refresh_done()
     lists = [x for x in cli.reqs if x[0] == "GET" and x[1] == "/my/spools"]
-    assert len(lists) <= 1
+    assert len(lists) == 1
     assert [x for x in cli.reqs if x[0] != "GET"] == []
+
+
+async def test_unknown_sticker_scan_never_refreshes(cli):
+    env = cli.env
+    for _ in range(50):
+        env.now[0] += 3600  # far past every refresh gap
+        assert (await scan(cli, UID)) == {"matched_spool_id": None}  # 7-byte UID
+    await env.inventory.refresh_done()
+    assert cli.reqs == []
+
+
+async def test_scan_of_tag_owned_by_uncached_spool_refreshes(cli):
+    env = cli.env
+    env.store.link_tag(env.store.spool_id("goneSPOOL"), NORM, "ntag")  # not in 3dfp list
+    env.now[0] += 601
+    assert (await scan(cli, UID)) == {"matched_spool_id": None}
+    await env.inventory.refresh_done()
+    assert [(m, p) for m, p, _ in cli.reqs] == [("GET", "/my/spools")]
 
 
 async def test_scan_bambu_tray_uuid(cli):

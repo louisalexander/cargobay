@@ -66,3 +66,13 @@ def test_missing_fields_are_none():
     assert r.remaining_grams is None and r.empty_spool_weight is None
     assert r.bambu_tray_uuid is None
     assert r.archived is False and r.is_bambu is False
+
+
+def test_all_zero_bambu_tray_uuid_is_none():
+    from cargobay.mapping import to_remote
+    base = {"short_code": "x1", "brand": "Bambu Lab", "material": "PLA"}
+    for v in ("0" * 32, "00000000-0000-0000-0000-000000000000", "", "  "):
+        r = to_remote({**base, "spool_properties": {"bambu_tray_uuid": v}})
+        assert r.bambu_tray_uuid is None
+    r = to_remote({**base, "spool_properties": {"bambu_tray_uuid": "ab" * 16}})
+    assert r.bambu_tray_uuid == "AB" * 16

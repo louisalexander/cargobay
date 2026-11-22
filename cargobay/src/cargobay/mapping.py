@@ -59,7 +59,7 @@ def to_remote(item: dict) -> Remote:
         location=None if not loc or loc.lower() == "shelf" else loc,
         remaining_grams=grams,
         empty_spool_weight=_int(item.get("empty_spool_weight")),
-        bambu_tray_uuid=uuid or None,
+        bambu_tray_uuid=uuid if uuid and set(uuid) != {"0"} else None,
         archived=grams == 0,
         filament_key=str(fid) if fid is not None else f"{brand}|{name}",
         is_bambu=brand.lower() == "bambu lab",
