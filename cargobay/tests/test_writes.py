@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from cargobay.api import make_app
@@ -143,3 +145,40 @@ async def test_set_location_store_retries_null(env):
         await inv.set_location(3, "Bad Place", internal=True)
     assert [b for _, _, b in env.fake[REQUESTS][n:]] == [{"location": "Bad Place"},
                                                           {"location": None}]
+
+
+async def test_unarchive_with_zero_weight_refused(cli):
+    r = await cli.patch("/api/v1/spool/4", json={"archived": False, "remaining_weight": 0},
+                        headers=cli.h)
+    assert r.status == 409 and cli.reqs == []
+
+
+async def test_refresh_in_flight_does_not_overwrite_write(cli, env):
+    inv = env.inventory
+    orig, release = env.client.list_spools, asyncio.Event()
+
+    async def gated():
+        raw = await orig()  # captured before the write below
+        await release.wait()
+        return raw
+
+    env.client.list_spools = gated
+    inv._begin_refresh()
+    await asyncio.sleep(0.05)
+    r = await cli.patch("/api/v1/spool/1", json={"remaining_weight": 321}, headers=cli.h)
+    assert r.status == 200
+    release.set()
+    await inv.refresh_done()
+    assert (await (await cli.get("/api/v1/spool/1", headers=cli.h)).json())["remaining_weight"] == 321
+    held = {s["short_code"]: s for s in env.store.snapshot()}[SC]
+    assert held["remaining_grams"] == 321
+
+
+async def test_concurrent_patches_end_in_3dfp_order(cli, env):
+    rs = await asyncio.gather(*[
+        cli.patch("/api/v1/spool/1", json={"remaining_weight": w}, headers=cli.h)
+        for w in (100, 200, 300)])
+    assert all(r.status == 200 for r in rs)
+    last = patched(cli)[-1][2]["remaining_grams"]
+    got = await (await cli.get("/api/v1/spool/1", headers=cli.h)).json()
+    assert got["remaining_weight"] == last

@@ -5,6 +5,7 @@ replaced by a rate-limited background refresh and persisted as a snapshot.
 """
 
 import asyncio
+import dataclasses
 import logging
 import re
 import time
@@ -88,6 +89,8 @@ class Inventory:
         self._task: asyncio.Task | None = None
         self._last_attempt = 0.0
         self.on_change: list[Callable[[], None]] = []
+        self._gen = 0  # bumped by every applied write; refresh drops stale lists
+        self._locks: dict[int, asyncio.Lock] = {}
         self.on_seen: list[Callable[[int], None]] = []
         self.trays: Callable[[], dict[int, dict]] = lambda: {}
 
@@ -122,6 +125,7 @@ class Inventory:
         self._task = asyncio.get_running_loop().create_task(self._refresh())
 
     async def _refresh(self) -> None:
+        gen = self._gen
         try:
             raw = await self.client.list_spools()
         except ApiError as e:
@@ -129,6 +133,9 @@ class Inventory:
             return
         except Exception:
             log.exception("3dfp refresh crashed, keeping cache")
+            return
+        if gen != self._gen:
+            log.info("dropping 3dfp list: a write landed while it was in flight")
             return
         self.store.save_snapshot(raw, self._clock())
         self._load(raw)
@@ -230,7 +237,15 @@ class Inventory:
                 return True
         return False
 
+    def _lock(self, spool_id: int) -> asyncio.Lock:
+        return self._locks.setdefault(spool_id, asyncio.Lock())
+
     async def patch(self, spool_id: int, body: dict) -> dict:
+        self._require(spool_id)
+        async with self._lock(spool_id):
+            return await self._patch(spool_id, body)
+
+    async def _patch(self, spool_id: int, body: dict) -> dict:
         r = self._require(spool_id)
         if not isinstance(body, dict):
             raise Refused(400, "body must be a JSON object")
@@ -268,8 +283,8 @@ class Inventory:
             remote["location"] = loc
         if archived is True:
             weight = 0
-        elif archived is False and weight is None:
-            raise Refused(409, "nothing to write: send a remaining_weight to unarchive")
+        elif archived is False and (weight is None or round(weight) <= 0):
+            raise Refused(409, "unarchive needs a remaining_weight above 0")
         if weight is not None:
             if self.bambu_loaded(spool_id):
                 raise Refused(409, "reel is loaded in the AMS; the printer owns its weight",
@@ -282,9 +297,14 @@ class Inventory:
         return self.spool(spool_id)
 
     async def measure(self, spool_id: int, gross) -> dict:
-        r = self._require(spool_id)
+        self._require(spool_id)
         if not _num(gross) or gross < 0:
             raise Refused(400, "weight must be a non-negative number")
+        async with self._lock(spool_id):
+            return await self._measure(spool_id, gross)
+
+    async def _measure(self, spool_id: int, gross) -> dict:
+        r = self._require(spool_id)
         if self.bambu_loaded(spool_id):
             raise Refused(409, "reel is loaded in the AMS; the printer owns its weight",
                           spool_id)
@@ -306,14 +326,16 @@ class Inventory:
         r = self._require(spool_id)
         if not internal and is_slot_location(location):
             raise Refused(409, "slot locations are set by the printer binding")
-        try:
-            await self._commit(spool_id, r, {"location": location}, {}, {})
-        except Upstream as e:
-            cause = e.__cause__
-            if not (isinstance(cause, ApiError) and cause.code == "invalid_location"
-                    and location is not None and location == self.options.store_location):
-                raise
-            await self._commit(spool_id, r, {"location": None}, {}, {})
+        async with self._lock(spool_id):
+            try:
+                await self._commit(spool_id, r, {"location": location}, {}, {})
+            except Upstream as e:
+                cause = e.__cause__
+                if not (isinstance(cause, ApiError) and cause.code == "invalid_location"
+                        and location is not None
+                        and location == self.options.store_location):
+                    raise
+                await self._commit(spool_id, r, {"location": None}, {}, {})
 
     def _require(self, spool_id: int) -> Remote:
         r = self.remote(spool_id)
@@ -341,12 +363,19 @@ class Inventory:
         if extra:
             self.store.merge_extra(spool_id, extra)
         if remote:
-            raw = dict(self._cache[spool_id][0])
-            raw.update(remote)
+            self._gen += 1
+            old_raw, old = self._cache[spool_id]
+            raw = {**old_raw, **remote}
             try:
-                self._cache[spool_id] = (raw, to_remote(raw))
+                new = to_remote(raw)
             except (KeyError, TypeError, AttributeError):
-                return
+                log.exception("could not re-map spool after a 3dfp write; patching cache")
+                grams = remote.get("remaining_grams", old.remaining_grams)
+                loc = remote.get("location", old.location)
+                new = dataclasses.replace(
+                    old, remaining_grams=grams, archived=grams == 0,
+                    location=loc if loc and loc.lower() != "shelf" else None)
+            self._cache[spool_id] = (raw, new)
             self.store.save_snapshot([i for i, _ in self._cache.values()],
                                      self.store.snapshot_ts())
         for cb in list(self.on_change):
