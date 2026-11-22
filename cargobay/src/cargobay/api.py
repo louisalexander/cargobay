@@ -139,10 +139,7 @@ async def _write(request: web.Request, run) -> web.Response:
     try:
         return _json(await run(request.app[INVENTORY], spool_id, body))
     except Refused as e:
-        out = {"message": e.message}
-        if e.spool_id is not None:
-            out["spool_id"] = e.spool_id
-        return _json(out, e.status)
+        return _refused(e)
     except Upstream as e:
         return _json({"message": e.message}, 502)
 
@@ -163,6 +160,45 @@ async def measure(request: web.Request) -> web.Response:
     return await _write(request, run)
 
 
+def _refused(e: Refused) -> web.Response:
+    out = {"message": e.message}
+    if e.spool_id is not None:
+        out["spool_id"] = e.spool_id
+    return _json(out, e.status)
+
+
+async def tag_scan(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    uid = body.get("uid") if isinstance(body, dict) else None
+    if not isinstance(uid, str):
+        return _json({"matched_spool_id": None})
+    return _json(request.app[INVENTORY].scan(uid))
+
+
+async def link_tag(request: web.Request) -> web.Response:
+    async def run(inv, i, body):
+        if not isinstance(body, dict) or not isinstance(body.get("uid"), str):
+            raise Refused(400, "uid is required")
+        return inv.link(i, body["uid"], body.get("format") or "ntag")
+    return await _write(request, run)
+
+
+async def unlink_tag(request: web.Request) -> web.Response:
+    spool_id = _spool_id(request)
+    if spool_id is None:
+        return _missing_msg()
+    try:
+        ok = request.app[INVENTORY].unlink(spool_id, request.match_info["uid"])
+    except Refused as e:
+        return _refused(e)
+    if not ok:
+        return _json({"message": "tag is not on this spool"}, 404)
+    return _json(request.app[INVENTORY].spool(spool_id))
+
+
 def make_app(inventory: Inventory, binder, options: Options) -> web.Application:
     app = web.Application(middlewares=[auth])
     app[INVENTORY] = inventory
@@ -178,6 +214,9 @@ def make_app(inventory: Inventory, binder, options: Options) -> web.Application:
     app.router.add_get(f"{p}/field/spool", field_list)
     app.router.add_get(f"{p}/location", locations)
     app.router.add_get(f"{p}/tag/reader", tag_reader)
+    app.router.add_post(f"{p}/tag/scan", tag_scan)
+    app.router.add_post(f"{p}/spool/{{id}}/tag", link_tag)
+    app.router.add_delete(f"{p}/spool/{{id}}/tag/{{uid}}", unlink_tag)
     for path in ("external/manufacturer", "external/filament/search", "external/material"):
         app.router.add_get(f"{p}/{path}", not_found)
     for path in ("vendor", "filament", "spool"):

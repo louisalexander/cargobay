@@ -169,10 +169,53 @@ class Inventory:
         return [self._render(i, r) for i, (_, r) in self._cache.items()
                 if allow_archived or not r.archived]
 
+    def _match(self, uid: str) -> int | None:
+        """Spool id for a scanned uid: a native tag, else a Bambu tray UUID."""
+        norm = normalise_uid(uid)
+        if not norm:
+            return None
+        owner = self.store.tag_owner(norm)
+        if owner is not None and owner in self._cache:
+            return owner
+        for i, (_, r) in self._cache.items():
+            if r.bambu_tray_uuid and r.bambu_tray_uuid == norm:
+                return i
+        return None
+
     def find_by_tag(self, uid: str, allow_archived: bool = False) -> dict | None:
-        owner = self.store.tag_owner(normalise_uid(uid))
-        s = self.spool(owner) if owner is not None else None
+        i = self._match(uid)
+        s = self.spool(i) if i is not None else None
         return s if s and (allow_archived or not s["archived"]) else None
+
+    # tags
+    def scan(self, uid: str) -> dict:
+        """Read-only lookup; archived spools match. A miss may start a bounded refresh."""
+        i = self._match(uid)
+        if i is None:
+            self.maybe_refresh("scan_miss")
+            return {"matched_spool_id": None}
+        for cb in list(self.on_seen):
+            try:
+                cb(i)
+            except Exception:
+                log.exception("on_seen callback failed")
+        return {"matched_spool_id": i, "spool": self.spool(i)}
+
+    def link(self, spool_id: int, uid: str, fmt: str = "ntag") -> dict:
+        self._require(spool_id)
+        norm = normalise_uid(uid) if isinstance(uid, str) else ""
+        if not norm or len(norm) > 64:
+            raise Refused(400, "uid must be 1-64 hex digits")
+        owner = self.store.tag_owner(norm)
+        if owner is not None and owner != spool_id:
+            raise Refused(409, f"Tag {norm} is already linked to spool {owner}.",
+                          spool_id=owner)
+        self.store.link_tag(spool_id, norm, fmt if isinstance(fmt, str) and fmt else "ntag")
+        return self.spool(spool_id)
+
+    def unlink(self, spool_id: int, uid: str) -> bool:
+        self._require(spool_id)
+        return self.store.unlink_tag(spool_id, normalise_uid(uid))
 
     def _render(self, spool_id: int, r: Remote) -> dict:
         local = self.store.local(spool_id)
