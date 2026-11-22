@@ -4,7 +4,7 @@ import aiohttp
 import pytest
 from aiohttp.test_utils import TestServer
 
-from cargobay.ha import HA
+from cargobay.ha import HA, HAError
 from cargobay.publish import Publisher, QuotaWatch
 from fakes import fake_ha
 from fakes.fake_3dfp import REQUESTS
@@ -115,3 +115,69 @@ async def test_quota_low_fires_once_per_month(env):
     env.now[0] += 40 * DAY  # next month: the client resets warned; low again
     await env.client.list_spools()
     assert len(await events()) == 2
+
+
+class GateHA:
+    """Records set_state calls; the first call blocks until released."""
+
+    def __init__(self):
+        self.states = {}
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.first = True
+
+    async def set_state(self, entity_id, state, attributes):
+        if self.first:
+            self.first = False
+            self.entered.set()
+            await self.gate.wait()
+        self.states[entity_id] = state
+
+
+async def test_change_during_inflight_publish_is_not_lost(env):
+    ha = GateHA()
+    pub = Publisher(ha, env.inventory, env.store, min_interval=0)
+    pub.schedule()
+    await asyncio.wait_for(ha.entered.wait(), 2)
+    env.store.set_binding(2, 1)  # lands after the publish started
+    pub.schedule()
+    ha.gate.set()
+    await asyncio.wait_for(pub._task, 2)
+    assert ha.states["sensor.cargobay_tray_2"] == "Acme PLA Basic Jet Black"
+
+
+async def test_direct_publish_does_not_overlap_scheduled(env):
+    ha = GateHA()
+    pub = Publisher(ha, env.inventory, env.store, min_interval=0)
+    pub.schedule()
+    await asyncio.wait_for(ha.entered.wait(), 2)
+    direct = asyncio.create_task(pub.publish())
+    await asyncio.sleep(0.05)
+    assert not direct.done()  # waits for the in-flight publish
+    ha.gate.set()
+    await asyncio.wait_for(direct, 2)
+    await pub.close()
+
+
+class FlakyHA:
+    def __init__(self):
+        self.fail = True
+        self.events = []
+
+    async def fire_event(self, t, d):
+        if self.fail:
+            raise HAError("down")
+        self.events.append((t, d))
+
+
+@pytest.mark.parametrize("env", [{"remaining": 100}], indirect=True)
+async def test_quota_warned_only_after_delivery(env):
+    ha = FlakyHA()
+    env.client.on_quota.append(watch := QuotaWatch(ha, env.store))
+    await env.client.list_spools()
+    await asyncio.gather(*watch._tasks)
+    assert env.store.quota().warned is False and ha.events == []
+    ha.fail = False
+    await env.client.list_spools()
+    await asyncio.gather(*watch._tasks)
+    assert env.store.quota().warned is True and len(ha.events) == 1

@@ -45,25 +45,38 @@ async def run(options_path: str = "/data/options.json", *,
     if key is None:
         log.error("running read-only from the snapshot; writes to 3dfp will fail")
 
-    store = Store(options.db_path)
-    session = aiohttp.ClientSession()
-    runner: web.AppRunner | None = None
-    ha_task: asyncio.Task | None = None
-    inventory: Inventory | None = None
-    publisher: Publisher | None = None
-    quota_watch: QuotaWatch | None = None
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     installed = []
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, stop.set)
-            installed.append(sig)
-        except (NotImplementedError, RuntimeError):
-            pass
+    store = Store(options.db_path)
     try:
-        client = Client(session, options.threedfp_base, key, store)
-        inventory = Inventory(store, client, options)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, stop.set)
+                installed.append(sig)
+            except (NotImplementedError, RuntimeError):
+                pass
+        session = aiohttp.ClientSession()
+        try:
+            await _serve(options, store, session, key, token, ws_url, rest_url,
+                         host, port, stop)
+        finally:
+            await session.close()
+    finally:
+        for sig in installed:
+            loop.remove_signal_handler(sig)
+        store.close()
+
+
+async def _serve(options, store, session, key, token, ws_url, rest_url, host, port,
+                 stop: asyncio.Event) -> None:
+    client = Client(session, options.threedfp_base, key, store)
+    inventory = Inventory(store, client, options)
+    ha_task: asyncio.Task | None = None
+    publisher: Publisher | None = None
+    quota_watch: QuotaWatch | None = None
+    runner: web.AppRunner | None = None
+    try:
         await inventory.start()
         profiles = Profiles(load_table(), options.profile_overrides)
         ha = HA(session, ws_url=ws_url, rest_url=rest_url, token=token)
@@ -82,27 +95,40 @@ async def run(options_path: str = "/data/options.json", *,
 
         async def on_states(states: dict) -> None:
             await binder.on_states(states)
-            await publisher.publish()
+            await publisher.publish()  # serialised with scheduled publishes
 
         ha_task = asyncio.create_task(ha.run(on_states, binder.on_change))
-        await stop.wait()
+        stop_task = asyncio.create_task(stop.wait())
+        try:
+            await asyncio.wait({stop_task, ha_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop_task.cancel()
+        if ha_task.done() and not stop.is_set():
+            exc = None if ha_task.cancelled() else ha_task.exception()
+            log.error("Home Assistant client stopped unexpectedly (%r); shutting down",
+                      exc)
     finally:
-        for sig in installed:
-            loop.remove_signal_handler(sig)
-        if ha_task is not None:
-            ha_task.cancel()
-            await asyncio.gather(ha_task, return_exceptions=True)
-        if inventory is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(inventory.refresh_done(), 3)
-        if publisher is not None:
-            await publisher.close()
-        if quota_watch is not None:
-            await quota_watch.close()
-        if runner is not None:
-            await runner.cleanup()
-        await session.close()
-        store.close()
+        try:
+            if ha_task is not None:
+                ha_task.cancel()
+                await asyncio.gather(ha_task, return_exceptions=True)
+            if publisher is not None:
+                await _quiet(publisher.close())
+            if quota_watch is not None:
+                await _quiet(quota_watch.close())
+        finally:
+            try:
+                if runner is not None:
+                    await runner.cleanup()
+            finally:
+                await _quiet(asyncio.wait_for(inventory.refresh_done(), 3))
+
+
+async def _quiet(coro) -> None:
+    try:
+        await coro
+    except Exception:
+        log.exception("error during shutdown")
 
 
 def main() -> None:

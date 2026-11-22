@@ -117,3 +117,15 @@ async def test_missing_key_file_read_only(rig, caplog):
     assert rig.f3[REQUESTS] == []  # no network request without a key
     assert "no_key" in caplog.text or "cannot read the 3dfp key file" in caplog.text
     await rig.stop()
+
+
+async def test_ha_task_death_shuts_down(rig, monkeypatch):
+    from cargobay import main as m
+
+    async def boom(self, *a, **k):
+        raise RuntimeError("ha died")
+
+    monkeypatch.setattr(m.HA, "run", boom)
+    rig.write(True)
+    rig.start()
+    await asyncio.wait_for(rig.task, 5)  # run() returns by itself
