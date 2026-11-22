@@ -134,20 +134,28 @@ class Binder:
                    source: Literal["scan", "manual"] = "manual") -> dict:
         async with self._lock:
             log.info("%s bind: spool %d -> slot %d", source, spool_id, slot)
-            return await self._bind(spool_id, slot)
+            return await self._bind(spool_id, slot, source)
 
-    async def _bind(self, spool_id: int, slot: int) -> dict:
+    async def _bind(self, spool_id: int, slot: int,
+                    source: Literal["scan", "manual"] = "scan") -> dict:
         if slot not in SLOTS:
             raise Refused(400, "slot must be 1-4")
         r = self.inventory.remote(spool_id)
         if r is None:
             raise Refused(404, "no such spool")
-        if real_uuid(self._trays.get(slot, {}).get("tray_uuid")):
+        if source == "manual" and r.is_bambu:
+            raise Refused(409, "Bambu reels are tracked by their RFID tags", spool_id)
+        tray = self._trays.get(slot)
+        if tray is None:
+            raise Refused(409, f"slot {slot} is not visible in Home Assistant")
+        if real_uuid(tray.get("tray_uuid")):
             raise Refused(409, f"slot {slot} holds an RFID reel")
-        # one spool per tray, one tray per spool (set_binding is INSERT OR REPLACE)
-        for s, sid in self.store.bindings().items():
-            if s == slot or sid == spool_id:
-                self.store.clear_binding(s)
+        if tray.get("empty") is not False:
+            raise Refused(409, f"slot {slot} is not loaded")
+        # one spool per tray, one tray per spool (set_binding is INSERT OR REPLACE);
+        # released only once the printer took the profile, so an HA failure keeps them
+        release = {s: sid for s, sid in self.store.bindings().items()
+                   if s == slot or sid == spool_id}
         profile = self.profiles.for_remote(r)
         if profile is None:
             await self.ha.fire_event("cargobay_profile_missing",
@@ -155,10 +163,18 @@ class Binder:
         else:
             await self.ha.call_service("bambu_lab", "set_filament",
                                        {"entity_id": tray_entities[slot - 1], **profile.data()})
+        for s in release:
+            self.store.clear_binding(s)
+        displaced = release.get(slot)
+        if displaced is not None and displaced != spool_id:
+            self.store.mark_unbound(displaced, self._clock())
+            await self._fire("cargobay_unbound", {
+                "slot": slot, "spool_id": displaced,
+                "short_code": self.store.short_code(displaced)})
         try:
             await self.inventory.set_location(spool_id, slot_location(slot), internal=True)
             written = True
-        except Upstream as e:
+        except (Upstream, Refused) as e:
             log.error("bound spool %d to slot %d but 3dfp location failed: %s",
                       spool_id, slot, e.message)
             written = False

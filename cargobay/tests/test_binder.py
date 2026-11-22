@@ -7,7 +7,7 @@ from aiohttp.test_utils import TestServer
 
 from cargobay.api import make_app
 from cargobay.binder import Binder
-from cargobay.ha import HA
+from cargobay.ha import HA, HAError
 from cargobay.inventory import Refused
 from cargobay.profiles import Profiles, load_table
 from fakes import fake_ha
@@ -252,11 +252,66 @@ async def test_rfid_replaces_bound_tray_no_write(rig):
 async def test_one_spool_one_tray(rig):
     rig.scan(1)
     await rig.load(2)
+    await rig.load(3)  # nothing pending: asks
+    rig.events.clear()
     out = await rig.binder.bind(1, 3, "manual")
     assert out["slot"] == 3 and out["spool_id"] == 1
     assert rig.env.store.bindings() == {3: 1}
+    assert [t for t, _ in rig.events] == ["cargobay_bound"]  # a move, not an unbind
+    rig.events.clear()
     await rig.binder.bind(3, 3, "manual")  # spool 3 takes slot 3 from spool 1
     assert rig.env.store.bindings() == {3: 3}
+    assert rig.events[0] == ("cargobay_unbound", {"slot": 3, "spool_id": 1,
+                                                  "short_code": "acmePLA01"})
+    assert rig.env.store.last_unbound(1) == rig.env.now[0]
+    rig.scan(1)  # the displaced spool is swap-safe like any unbound one
+    assert rig.binder.pending() is None
+
+
+async def test_bind_refuses_empty_or_unseen_tray(rig):
+    await rig.push(3, tray(3, state="unavailable"))
+    for slot in (2, 3):  # 2 is empty, 3 unavailable
+        with pytest.raises(Refused) as e:
+            await rig.binder.bind(1, slot, "manual")
+        assert e.value.status == 409
+    rig.app[fake_ha.STATES].pop(entity(4))
+    target = rig.done + 1
+    await fake_ha.drop_connections(rig.app)  # slot 4 now unseen
+    await rig.settle(target)
+    with pytest.raises(Refused) as e:
+        await rig.binder.bind(1, 4, "manual")
+    assert e.value.status == 409
+    assert rig.calls == [] and rig.reqs == [] and rig.env.store.bindings() == {}
+
+
+async def test_set_filament_failure_keeps_old_bindings(rig):
+    rig.scan(1)
+    await rig.load(2)
+    await rig.load(3)
+    rig.reqs.clear()
+    rig.app[fake_ha.FAIL]["call_service"] = True
+    with pytest.raises(HAError):
+        await rig.binder.bind(1, 3, "manual")
+    assert rig.env.store.bindings() == {2: 1} and rig.reqs == []
+
+
+async def test_manual_bind_refuses_bambu_reel(rig):
+    await rig.load(3)
+    with pytest.raises(Refused) as e:
+        await rig.binder.bind(5, 3, "manual")
+    assert e.value.status == 409
+    assert rig.calls == [] and rig.env.store.bindings() == {}
+
+
+async def test_location_refused_still_binds(rig, monkeypatch):
+    rig.scan(1)
+
+    async def refuse(*_a, **_k):
+        raise Refused(404, "no such spool")
+    monkeypatch.setattr(rig.env.inventory, "set_location", refuse)
+    await rig.load(2)
+    assert rig.env.store.bindings() == {2: 1}
+    assert bound_events(rig)[0]["location_written"] is False
 
 
 async def test_bind_refuses_rfid_tray(rig):
@@ -364,8 +419,13 @@ async def test_manual_bind_route(rig, api):
 
 async def test_manual_bind_route_errors(rig, api):
     await rig.push(4, tray(4, loaded=True, uuid=REAL))
+    await rig.load(2)
     r = await api.post("/cargobay/bind", json={"spool_id": 1, "slot": 4}, headers=api.h)
     assert r.status == 409
+    for body in ({"spool_id": 1, "slot": 1}, {"short_code": "bblPLA001", "slot": 2}):
+        r = await api.post("/cargobay/bind", json=body, headers=api.h)  # empty / Bambu
+        assert r.status == 409, body
+    assert rig.calls == []
     rig.app[fake_ha.FAIL]["call_service"] = True
     r = await api.post("/cargobay/bind", json={"spool_id": 1, "slot": 2}, headers=api.h)
     assert r.status == 503 and rig.reqs == []
@@ -388,9 +448,11 @@ async def test_manual_unbind_route(rig, api):
     assert r.status == 400
     r = await api.post("/cargobay/unbind", json={"slot": 2})
     assert r.status == 401
-    # an emptied tray is shelved on a manual unbind
-    await rig.binder.bind(1, 1, "manual")
+    # a manually bound tray that then empties is unbound and shelved
+    await rig.load(1)
+    r = await api.post("/cargobay/bind", json={"spool_id": 1, "slot": 1}, headers=api.h)
+    assert r.status == 200 and rig.env.store.bindings() == {1: 1}
     rig.reqs.clear()
-    r = await api.post("/cargobay/unbind", json={"slot": 1}, headers=api.h)
-    assert r.status == 200
+    await rig.empty(1)
+    assert rig.env.store.bindings() == {}
     assert rig.patches() == [("/my/spools/acmePLA01", {"location": SHELF})]
