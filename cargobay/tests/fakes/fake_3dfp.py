@@ -8,6 +8,7 @@ REQUESTS = web.AppKey("requests", list)  # (method, path, body) tuples
 AUTHS = web.AppKey("auths", list)  # Authorization header per request
 FAIL = web.AppKey("fail", dict)  # mutate in place, never reassign a key on a started app
 # path or "*" -> (status, code or None for no body)
+FAIL_ONCE = web.AppKey("fail_once", dict)  # like FAIL, but each entry fails one request
 REMAINING = web.AppKey("remaining", int)
 SPOOLS = web.AppKey("spools", list)
 EXTRA = web.AppKey("extra", dict)  # merged into the list body (pagination tests)
@@ -56,6 +57,7 @@ def make_app(spools: list[dict], remaining: int | None = 1000) -> web.Applicatio
     app[REQUESTS] = []
     app[AUTHS] = []
     app[FAIL] = {}
+    app[FAIL_ONCE] = {}
     app[EXTRA] = {}
     app[REMAINING] = remaining  # value before the first request; echoed minus requests seen
 
@@ -75,7 +77,8 @@ def make_app(spools: list[dict], remaining: int | None = 1000) -> web.Applicatio
         headers = {}
         if app[REMAINING] is not None:  # None: omit the header
             headers["X-RateLimit-Remaining"] = str(app[REMAINING] - len(app[REQUESTS]))
-        fail = app[FAIL].get(request.path) or app[FAIL].get("*")
+        fail = (app[FAIL_ONCE].pop(request.path, None) or app[FAIL].get(request.path)
+                or app[FAIL].get("*"))
         if fail:
             return error(*fail, headers)
         resp = await handler(request)

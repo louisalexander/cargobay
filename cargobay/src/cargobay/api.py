@@ -1,4 +1,4 @@
-"""Spoolman Part 1 HTTP API (read side)."""
+"""Spoolman Part 1 HTTP API, plus Cargo Bay's manual bind/unbind routes."""
 
 import base64
 import binascii
@@ -9,6 +9,7 @@ from aiohttp import web
 
 from . import __version__
 from .config import Options
+from .ha import HAError
 from .inventory import Inventory, Refused, Upstream
 
 INVENTORY = web.AppKey("inventory", Inventory)
@@ -199,6 +200,49 @@ async def unlink_tag(request: web.Request) -> web.Response:
     return _json(request.app[INVENTORY].spool(spool_id))
 
 
+def _int(v) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+async def _cargobay(request: web.Request, run) -> web.Response:
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return _json({"message": "body must be a JSON object"}, 400)
+    slot = _int(body.get("slot"))
+    if slot is None or not 1 <= slot <= 4:
+        return _json({"message": "slot must be 1-4"}, 400)
+    try:
+        return _json(await run(request.app[BINDER], slot, body))
+    except Refused as e:
+        return _refused(e)
+    except HAError as e:
+        return _json({"message": f"Home Assistant unavailable: {e}"}, 503)
+
+
+async def cargobay_bind(request: web.Request) -> web.Response:
+    async def run(binder, slot, body):
+        inv = request.app[INVENTORY]
+        if "spool_id" in body:
+            spool_id = _int(body["spool_id"])
+            if spool_id is None:
+                raise Refused(400, "spool_id must be an integer")
+        elif isinstance(body.get("short_code"), str):
+            spool_id = inv.id_for_short_code(body["short_code"])
+            if spool_id is None:
+                raise Refused(404, "no such spool")
+        else:
+            raise Refused(400, "spool_id or short_code is required")
+        return await binder.bind(spool_id, slot, "manual")
+    return await _cargobay(request, run)
+
+
+async def cargobay_unbind(request: web.Request) -> web.Response:
+    return await _cargobay(request, lambda binder, slot, _b: binder.unbind_manual(slot))
+
+
 def make_app(inventory: Inventory, binder, options: Options) -> web.Application:
     app = web.Application(middlewares=[auth])
     app[INVENTORY] = inventory
@@ -217,6 +261,8 @@ def make_app(inventory: Inventory, binder, options: Options) -> web.Application:
     app.router.add_post(f"{p}/tag/scan", tag_scan)
     app.router.add_post(f"{p}/spool/{{id}}/tag", link_tag)
     app.router.add_delete(f"{p}/spool/{{id}}/tag/{{uid}}", unlink_tag)
+    app.router.add_post("/cargobay/bind", cargobay_bind)
+    app.router.add_post("/cargobay/unbind", cargobay_unbind)
     for path in ("external/manufacturer", "external/filament/search", "external/material"):
         app.router.add_get(f"{p}/{path}", not_found)
     for path in ("vendor", "filament", "spool"):

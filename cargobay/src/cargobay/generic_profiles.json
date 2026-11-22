@@ -1,0 +1,242 @@
+{
+  "GFB98": {
+    "name": "Generic ASA",
+    "nozzle_max": 280,
+    "nozzle_min": 240,
+    "type": "ASA"
+  },
+  "GFB99": {
+    "name": "Generic ABS",
+    "nozzle_max": 280,
+    "nozzle_min": 240,
+    "type": "ABS"
+  },
+  "GFC99": {
+    "name": "Generic PC",
+    "nozzle_max": 290,
+    "nozzle_min": 260,
+    "type": "PC"
+  },
+  "GFG96": {
+    "name": "Generic PETG HF",
+    "nozzle_max": 270,
+    "nozzle_min": 220,
+    "type": "PETG"
+  },
+  "GFG97": {
+    "name": "Generic PCTG",
+    "nozzle_max": 270,
+    "nozzle_min": 240,
+    "type": "PCTG"
+  },
+  "GFG98": {
+    "name": "Generic PETG-CF",
+    "nozzle_max": 270,
+    "nozzle_min": 240,
+    "type": "PETG-CF"
+  },
+  "GFG99": {
+    "name": "Generic PETG",
+    "nozzle_max": 270,
+    "nozzle_min": 220,
+    "type": "PETG"
+  },
+  "GFL95": {
+    "name": "Generic PLA High Speed",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA"
+  },
+  "GFL96": {
+    "name": "Generic PLA Silk",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA"
+  },
+  "GFL98": {
+    "name": "Generic PLA-CF",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA-CF"
+  },
+  "GFL99": {
+    "name": "Generic PLA",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA"
+  },
+  "GFN96": {
+    "name": "Generic PPA-GF",
+    "nozzle_max": 320,
+    "nozzle_min": 280,
+    "type": "PPA-GF"
+  },
+  "GFN97": {
+    "name": "Generic PPA-CF",
+    "nozzle_max": 320,
+    "nozzle_min": 280,
+    "type": "PPA-CF"
+  },
+  "GFN98": {
+    "name": "Generic PA-CF",
+    "nozzle_max": 300,
+    "nozzle_min": 260,
+    "type": "PA-CF"
+  },
+  "GFN99": {
+    "name": "Generic PA",
+    "nozzle_max": 280,
+    "nozzle_min": 240,
+    "type": "PA"
+  },
+  "GFP95": {
+    "name": "Generic PP-GF",
+    "nozzle_max": 250,
+    "nozzle_min": 220,
+    "type": "PP-GF"
+  },
+  "GFP96": {
+    "name": "Generic PP-CF",
+    "nozzle_max": 250,
+    "nozzle_min": 220,
+    "type": "PP-CF"
+  },
+  "GFP97": {
+    "name": "Generic PP",
+    "nozzle_max": 250,
+    "nozzle_min": 220,
+    "type": "PP"
+  },
+  "GFP98": {
+    "name": "Generic PE-CF",
+    "nozzle_max": 220,
+    "nozzle_min": 175,
+    "type": "PE-CF"
+  },
+  "GFP99": {
+    "name": "Generic PE",
+    "nozzle_max": 220,
+    "nozzle_min": 175,
+    "type": "PE"
+  },
+  "GFR98": {
+    "name": "Generic PHA",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PHA"
+  },
+  "GFR99": {
+    "name": "Generic EVA",
+    "nozzle_max": 220,
+    "nozzle_min": 175,
+    "type": "EVA"
+  },
+  "GFS97": {
+    "name": "Generic BVOH",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "BVOH"
+  },
+  "GFS98": {
+    "name": "Generic HIPS",
+    "nozzle_max": 270,
+    "nozzle_min": 220,
+    "type": "HIPS"
+  },
+  "GFS99": {
+    "name": "Generic PVA",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PVA"
+  },
+  "GFSB98": {
+    "name": "Generic ASA",
+    "nozzle_max": 280,
+    "nozzle_min": 240,
+    "type": "ASA"
+  },
+  "GFSB99": {
+    "name": "Generic ABS",
+    "nozzle_max": 280,
+    "nozzle_min": 240,
+    "type": "ABS"
+  },
+  "GFSC99": {
+    "name": "Generic PC",
+    "nozzle_max": 290,
+    "nozzle_min": 260,
+    "type": "PC"
+  },
+  "GFSG99": {
+    "name": "Generic PETG",
+    "nozzle_max": 270,
+    "nozzle_min": 220,
+    "type": "PETG"
+  },
+  "GFSL98": {
+    "name": "Generic PLA-CF",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA-CF"
+  },
+  "GFSL99": {
+    "name": "Generic PLA",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA"
+  },
+  "GFSL99_01": {
+    "name": "Generic PLA Silk",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PLA"
+  },
+  "GFSN98": {
+    "name": "Generic PA",
+    "nozzle_max": 280,
+    "nozzle_min": 240,
+    "type": "PA"
+  },
+  "GFSN99": {
+    "name": "Generic PA-CF",
+    "nozzle_max": 300,
+    "nozzle_min": 260,
+    "type": "PA-CF"
+  },
+  "GFSR99": {
+    "name": "Generic TPU",
+    "nozzle_max": 250,
+    "nozzle_min": 200,
+    "type": "TPU"
+  },
+  "GFSS99": {
+    "name": "Generic PVA",
+    "nozzle_max": 240,
+    "nozzle_min": 190,
+    "type": "PVA"
+  },
+  "GFT97": {
+    "name": "Generic PPS",
+    "nozzle_max": 340,
+    "nozzle_min": 300,
+    "type": "PPS"
+  },
+  "GFT98": {
+    "name": "Generic PPS-CF",
+    "nozzle_max": 340,
+    "nozzle_min": 310,
+    "type": "PPS-CF"
+  },
+  "GFU98": {
+    "name": "Generic TPU for AMS",
+    "nozzle_max": 250,
+    "nozzle_min": 200,
+    "type": "TPU-AMS"
+  },
+  "GFU99": {
+    "name": "Generic TPU",
+    "nozzle_max": 250,
+    "nozzle_min": 200,
+    "type": "TPU"
+  }
+}

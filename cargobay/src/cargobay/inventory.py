@@ -161,6 +161,13 @@ class Inventory:
         hit = self._cache.get(spool_id)
         return hit[1] if hit else None
 
+    def id_for_short_code(self, short_code: str) -> int | None:
+        """Cached spool id for a 3dfp short_code; never mints a new id."""
+        for i, (_, r) in self._cache.items():
+            if r.short_code == short_code:
+                return i
+        return None
+
     def spool(self, spool_id: int) -> dict | None:
         hit = self._cache.get(spool_id)
         return self._render(spool_id, hit[1]) if hit else None
