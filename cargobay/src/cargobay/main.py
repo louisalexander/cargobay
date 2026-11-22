@@ -63,9 +63,11 @@ async def run(options_path: str = "/data/options.json", *,
         finally:
             await session.close()
     finally:
-        for sig in installed:
-            loop.remove_signal_handler(sig)
-        store.close()
+        try:
+            for sig in installed:
+                loop.remove_signal_handler(sig)
+        finally:
+            store.close()
 
 
 async def _serve(options, store, session, key, token, ws_url, rest_url, host, port,

@@ -118,16 +118,19 @@ async def test_quota_low_fires_once_per_month(env):
 
 
 class GateHA:
-    """Records set_state calls; the first call blocks until released."""
+    """Records set_state calls; the first tray-sensor write blocks until released."""
 
     def __init__(self):
         self.states = {}
+        self.spool_writes = 0
         self.entered = asyncio.Event()
         self.gate = asyncio.Event()
         self.first = True
 
     async def set_state(self, entity_id, state, attributes):
-        if self.first:
+        if entity_id == "sensor.cargobay_spools":
+            self.spool_writes += 1
+        elif self.first:  # a tray write: bindings were already read for this publish
             self.first = False
             self.entered.set()
             await self.gate.wait()
@@ -143,6 +146,7 @@ async def test_change_during_inflight_publish_is_not_lost(env):
     pub.schedule()
     ha.gate.set()
     await asyncio.wait_for(pub._task, 2)
+    assert ha.spool_writes == 2
     assert ha.states["sensor.cargobay_tray_2"] == "Acme PLA Basic Jet Black"
 
 

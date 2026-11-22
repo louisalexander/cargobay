@@ -98,8 +98,8 @@ class QuotaWatch:
     def __call__(self, remaining: int) -> None:
         if remaining >= QUOTA_WARN_BELOW or self._inflight or self.store.quota().warned:
             return
-        self._inflight = True
         task = asyncio.get_running_loop().create_task(self._fire(remaining))
+        self._inflight = True
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
