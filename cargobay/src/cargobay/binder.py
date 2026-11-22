@@ -77,6 +77,9 @@ class Binder:
     def spool_seen(self, spool_id: int) -> None:
         """A scan hit or a measure: arm the pending scan unless that is unsafe."""
         now = self._clock()
+        r = self.inventory.remote(spool_id)
+        if r is None or r.is_bambu or r.archived:
+            return  # Bambu reels belong to their RFID tags; archived spools are empty
         if spool_id in self.store.bindings().values():
             return
         last = self.store.last_unbound(spool_id)
@@ -103,6 +106,7 @@ class Binder:
                     log.info("reconcile: slot %d no longer holds spool %d", slot, spool_id)
                     self.store.clear_binding(slot)
                     self.store.mark_unbound(spool_id, self._clock())
+                    self._pending = None  # an unload clears a scan armed before it
                     self._bindings_changed()
 
     async def on_change(self, entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -132,6 +136,7 @@ class Binder:
                 return
             except HAError as e:
                 log.error("could not bind spool %d to slot %d: %s", p[0], slot, e)
+                await self._fire("cargobay_unbound_load", {"slot": slot})  # best effort
                 return
             except Refused as e:
                 log.warning("pending spool %d not bindable: %s", p[0], e.message)
@@ -152,8 +157,10 @@ class Binder:
         r = self.inventory.remote(spool_id)
         if r is None:
             raise Refused(404, "no such spool")
-        if source == "manual" and r.is_bambu:
+        if r.is_bambu:
             raise Refused(409, "Bambu reels are tracked by their RFID tags", spool_id)
+        if r.archived:
+            raise Refused(409, "spool is archived (empty)", spool_id)
         tray = self._trays.get(slot)
         if tray is None:
             raise Refused(409, f"slot {slot} is not visible in Home Assistant")
@@ -180,6 +187,7 @@ class Binder:
             await self._fire("cargobay_unbound", {
                 "slot": slot, "spool_id": displaced,
                 "short_code": self.store.short_code(displaced)})
+            await self._shelve(displaced)
         try:
             await self.inventory.set_location(spool_id, slot_location(slot), internal=True)
             written = True
@@ -218,12 +226,15 @@ class Binder:
             "slot": slot, "spool_id": spool_id,
             "short_code": self.store.short_code(spool_id)})
         if shelve:
-            try:
-                await self.inventory.set_location(spool_id, self.options.store_location,
-                                                  internal=True)
-            except (Upstream, Refused) as e:
-                log.error("could not shelve spool %d: %s", spool_id, e.message)
+            await self._shelve(spool_id)
         return {"slot": slot, "spool_id": spool_id}
+
+    async def _shelve(self, spool_id: int) -> None:
+        try:
+            await self.inventory.set_location(spool_id, self.options.store_location,
+                                              internal=True)
+        except (Upstream, Refused) as e:
+            log.error("could not shelve spool %d: %s", spool_id, e.message)
 
     async def _fire(self, event_type: str, data: dict) -> None:
         try:

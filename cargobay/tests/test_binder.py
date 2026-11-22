@@ -326,8 +326,17 @@ async def test_set_filament_failure_aborts_before_3dfp(rig):
     rig.scan(1)
     rig.app[fake_ha.FAIL]["call_service"] = True
     await rig.load(2)
-    assert len(rig.calls) == 1 and rig.reqs == [] and rig.events == []
+    assert len(rig.calls) == 1 and rig.reqs == []
+    assert rig.events == [("cargobay_unbound_load", {"slot": 2})]  # the user is asked
     assert rig.env.store.bindings() == {} and rig.binder.pending() is None
+
+
+async def test_set_filament_failure_ask_is_best_effort(rig):
+    rig.scan(1)
+    rig.app[fake_ha.FAIL]["call_service"] = True
+    rig.app[fake_ha.FAIL]["fire_event"] = True
+    await rig.load(2)  # neither failure escapes on_change
+    assert rig.events == [] and rig.env.store.bindings() == {}
 
 
 async def test_location_write_failure_still_binds(rig):
@@ -468,3 +477,93 @@ async def test_bindings_change_callback(rig):
     rig.env.now[0] += 10
     await rig.empty(2)
     assert len(hits) == 2
+
+
+BAMBU_UUID = "0123456789ABCDEF0123456789ABCDEF"
+
+
+async def test_scanned_bambu_reel_never_arms(rig):
+    assert rig.env.inventory.scan(BAMBU_UUID)["matched_spool_id"] == 5
+    assert rig.binder.pending() is None
+    await rig.load(2)
+    assert rig.events == [("cargobay_unbound_load", {"slot": 2})]
+    assert rig.calls == [] and rig.patches() == [] and rig.env.store.bindings() == {}
+
+
+async def test_weighed_bambu_reel_never_arms(rig):
+    await rig.env.inventory.measure(5, 900)  # on the shelf, not in a tray
+    rig.reqs.clear()
+    assert rig.binder.pending() is None
+    await rig.load(2)
+    assert rig.events == [("cargobay_unbound_load", {"slot": 2})]
+    assert rig.calls == [] and rig.patches() == [] and rig.env.store.bindings() == {}
+
+
+async def test_archived_spool_never_arms(rig):
+    rig.scan(4)  # acmeEMP01, remaining 0
+    assert rig.binder.pending() is None
+    await rig.load(2)
+    assert rig.events == [("cargobay_unbound_load", {"slot": 2})]
+    assert rig.calls == [] and rig.patches() == [] and rig.env.store.bindings() == {}
+
+
+async def test_bind_refuses_bambu_and_archived_for_any_source(rig):
+    await rig.load(3)
+    rig.events.clear()
+    for spool_id in (4, 5):
+        for source in ("manual", "scan"):
+            with pytest.raises(Refused) as e:
+                await rig.binder.bind(spool_id, 3, source)
+            assert e.value.status == 409
+    assert rig.calls == [] and rig.patches() == [] and rig.events == []
+    assert rig.env.store.bindings() == {}
+
+
+async def test_archived_manual_bind_route_409(rig, api):
+    await rig.load(3)
+    r = await api.post("/cargobay/bind", json={"short_code": "acmeEMP01", "slot": 3},
+                       headers=api.h)
+    assert r.status == 409
+    assert rig.calls == [] and rig.patches() == []
+
+
+async def test_displaced_spool_is_shelved(rig):
+    rig.scan(1)
+    await rig.load(3)
+    assert rig.env.store.bindings() == {3: 1}
+    rig.reqs.clear()
+    await rig.binder.bind(3, 3, "manual")
+    assert rig.patches() == [
+        ("/my/spools/acmePLA01", {"location": SHELF}),
+        ("/my/spools/acmeMAT01", {"location": "Printer: Bambu P2S, AMS: 1-3"})]
+    assert rig.env.store.bindings() == {3: 3}
+    assert rig.env.inventory.remote(1).location == SHELF
+
+
+async def test_displaced_shelve_failure_still_binds(rig):
+    rig.scan(1)
+    await rig.load(3)
+    rig.reqs.clear()
+    rig.env.fake[FAIL_ONCE]["/my/spools/acmePLA01"] = (503, "unavailable")
+    out = await rig.binder.bind(3, 3, "manual")
+    assert out["location_written"] is True and rig.env.store.bindings() == {3: 3}
+
+
+async def test_reconcile_unbind_clears_pending(env):
+    env.store.set_binding(2, 1)
+    states = {entity(n): tray(n) for n in range(1, 5)}
+    states[entity(2)] = tray(2, loaded=True)
+    rig = await make_rig(env, states)
+    try:
+        await rig.start()
+        assert env.store.bindings() == {2: 1}
+        rig.scan(3)
+        assert rig.binder.pending()[0] == 3
+        rig.app[fake_ha.STATES][entity(2)] = tray(2)  # unloaded while disconnected
+        target = rig.done + 1
+        await fake_ha.drop_connections(rig.app)
+        await rig.settle(target)
+        assert env.store.bindings() == {}
+        assert rig.binder.pending() is None
+    finally:
+        await close_rig(rig)

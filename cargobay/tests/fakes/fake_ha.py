@@ -11,7 +11,7 @@ STATES_SET = web.AppKey("states_set", dict)  # entity_id -> {"state", "attribute
 STATES = web.AppKey("states", dict)  # entity_id -> state object
 SOCKETS = web.AppKey("sockets", list)  # open websockets
 SUBS = web.AppKey("subs", dict)  # id(ws) -> subscription message id
-FAIL = web.AppKey("fail", dict)  # mutate in place: {"call_service": True} -> success false
+FAIL = web.AppKey("fail", dict)  # mutate in place: {"call_service"|"fire_event": True} -> success false
 CONNECTIONS = web.AppKey("connections", list)  # one entry per authenticated socket
 
 WS_PATH = "/websocket"
@@ -73,7 +73,11 @@ def make_app(token: str = "T", states: dict | None = None) -> web.Application:
                 ok = {"id": mid, "type": "result", "success": False,
                       "error": {"code": "service_error", "message": "fake failure"}}
         elif kind == "fire_event":
-            app[EVENTS].append((msg["event_type"], msg.get("event_data", {})))
+            if app[FAIL].get("fire_event"):
+                ok = {"id": mid, "type": "result", "success": False,
+                      "error": {"code": "event_error", "message": "fake failure"}}
+            else:
+                app[EVENTS].append((msg["event_type"], msg.get("event_data", {})))
         else:
             ok = {"id": mid, "type": "result", "success": False,
                   "error": {"code": "unknown_command", "message": kind}}
