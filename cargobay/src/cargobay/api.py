@@ -9,7 +9,7 @@ from aiohttp import web
 
 from . import __version__
 from .config import Options
-from .inventory import Inventory
+from .inventory import Inventory, Refused, Upstream
 
 INVENTORY = web.AppKey("inventory", Inventory)
 BINDER = web.AppKey("binder", object)
@@ -121,6 +121,48 @@ async def tag_reader(_r: web.Request) -> web.Response:
     return _json([])
 
 
+def _spool_id(request: web.Request) -> int | None:
+    try:
+        return int(request.match_info["id"])
+    except ValueError:
+        return None
+
+
+async def _write(request: web.Request, run) -> web.Response:
+    spool_id = _spool_id(request)
+    if spool_id is None:
+        return _missing_msg()
+    try:
+        body = await request.json()
+    except ValueError:
+        return _json({"message": "body must be JSON"}, 400)
+    try:
+        return _json(await run(request.app[INVENTORY], spool_id, body))
+    except Refused as e:
+        out = {"message": e.message}
+        if e.spool_id is not None:
+            out["spool_id"] = e.spool_id
+        return _json(out, e.status)
+    except Upstream as e:
+        return _json({"message": e.message}, 502)
+
+
+def _missing_msg() -> web.Response:
+    return _json({"message": "not found"}, 404)
+
+
+async def patch_spool(request: web.Request) -> web.Response:
+    return await _write(request, lambda inv, i, body: inv.patch(i, body))
+
+
+async def measure(request: web.Request) -> web.Response:
+    async def run(inv, i, body):
+        if not isinstance(body, dict) or "weight" not in body:
+            raise Refused(400, "weight is required")
+        return await inv.measure(i, body["weight"])
+    return await _write(request, run)
+
+
 def make_app(inventory: Inventory, binder, options: Options) -> web.Application:
     app = web.Application(middlewares=[auth])
     app[INVENTORY] = inventory
@@ -131,6 +173,8 @@ def make_app(inventory: Inventory, binder, options: Options) -> web.Application:
     app.router.add_get(f"{p}/info", info)
     app.router.add_get(f"{p}/spool", list_spools)
     app.router.add_get(f"{p}/spool/{{id}}", one_spool)
+    app.router.add_patch(f"{p}/spool/{{id}}", patch_spool)
+    app.router.add_put(f"{p}/spool/{{id}}/measure", measure)
     app.router.add_get(f"{p}/field/spool", field_list)
     app.router.add_get(f"{p}/location", locations)
     app.router.add_get(f"{p}/tag/reader", tag_reader)
