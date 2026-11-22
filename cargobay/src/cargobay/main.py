@@ -41,6 +41,9 @@ async def run(options_path: str = "/data/options.json", *,
               port: int = 7912, host: str = "0.0.0.0") -> None:
     options = load_options(options_path)
     token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if not token:
+        log.error("SUPERVISOR_TOKEN is not set; Home Assistant calls will fail to "
+                  "authenticate")
     key = _read_key(options.key_file)
     if key is None:
         log.error("running read-only from the snapshot; writes to 3dfp will fail")
@@ -79,7 +82,7 @@ async def _serve(options, store, session, key, token, ws_url, rest_url, host, po
     quota_watch: QuotaWatch | None = None
     runner: web.AppRunner | None = None
     try:
-        await inventory.start()
+        inventory.load_snapshot()  # serve from the snapshot; refresh once listening
         profiles = Profiles(load_table(), options.profile_overrides)
         ha = HA(session, ws_url=ws_url, rest_url=rest_url, token=token)
         binder = Binder(store, inventory, ha, profiles, options)
@@ -94,6 +97,7 @@ async def _serve(options, store, session, key, token, ws_url, rest_url, host, po
         await runner.setup()
         await web.TCPSite(runner, host, port).start()
         log.info("Cargo Bay listening on %s:%d", host, port)
+        inventory.initial_refresh()
 
         async def on_states(states: dict) -> None:
             await binder.on_states(states)

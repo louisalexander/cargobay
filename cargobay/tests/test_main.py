@@ -129,3 +129,59 @@ async def test_ha_task_death_shuts_down(rig, monkeypatch):
     rig.write(True)
     rig.start()
     await asyncio.wait_for(rig.task, 5)  # run() returns by itself
+
+
+async def test_missing_supervisor_token_logs_error(rig, monkeypatch, caplog):
+    monkeypatch.delenv("SUPERVISOR_TOKEN")
+    rig.write(True)
+    rig.start()
+    await until(rig.healthy)
+    errors = [r for r in caplog.records
+              if r.levelname == "ERROR" and "SUPERVISOR_TOKEN" in r.getMessage()]
+    assert len(errors) == 1
+    await rig.stop()
+
+
+async def test_token_present_no_token_error(rig, caplog):
+    rig.write(True)
+    rig.start()
+    await until(rig.healthy)
+    assert "SUPERVISOR_TOKEN" not in caplog.text
+    await rig.stop()
+
+
+async def test_initial_refresh_starts_after_listening(rig, monkeypatch):
+    from cargobay import main as m
+
+    order = []
+    real_start, real_refresh = m.web.TCPSite.start, m.Inventory.initial_refresh
+
+    async def site_start(self):
+        await real_start(self)
+        order.append("listening")
+
+    def initial_refresh(self):
+        order.append("refresh")
+        real_refresh(self)
+
+    monkeypatch.setattr(m.web.TCPSite, "start", site_start)
+    monkeypatch.setattr(m.Inventory, "initial_refresh", initial_refresh)
+    rig.write(True)
+    rig.start()
+    await until(rig.healthy)
+    assert order == ["listening", "refresh"]
+    await rig.stop()
+
+
+async def test_restart_with_fresh_snapshot_costs_no_3dfp_call(rig):
+    rig.write(True)
+    seed = Store(str(rig.tmp / "c.db"))
+    seed.save_snapshot(SAMPLE, time.time())
+    seed.close()
+    rig.start()
+    await until(rig.healthy)
+    h = {"X-API-Key": "K"}
+    async with rig.http.get(rig.url("/api/v1/spool"), headers=h) as r:
+        assert r.status == 200 and len(await r.json()) == 4
+    await rig.stop()
+    assert rig.f3[REQUESTS] == []
