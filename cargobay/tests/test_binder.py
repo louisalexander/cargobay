@@ -128,6 +128,16 @@ async def rig(env):
     await close_rig(r)
 
 
+@pytest.fixture
+async def rig_ha(env):
+    """A rig in ha_set_filament mode (direct AMS control), for the set_filament path."""
+    env.options.ams_control = "ha_set_filament"
+    r = await make_rig(env)
+    await r.start()
+    yield r
+    await close_rig(r)
+
+
 def bound_events(rig):
     return [d for t, d in rig.events if t == "cargobay_bound"]
 
@@ -136,17 +146,30 @@ async def test_scan_then_load_binds(rig):
     rig.scan(1)
     assert rig.binder.pending()[0] == 1
     await rig.load(2)
-    assert rig.calls == [("bambu_lab", "set_filament", {
-        "entity_id": entity(2), "tray_info_idx": "GFL99", "tray_type": "PLA",
-        "tray_color": "1A1A1AFF", "nozzle_temp_min": 190, "nozzle_temp_max": 240})]
+    assert rig.calls == []  # cloud-mode AMS control is blocked; notify instead
+    assert ("cargobay_pick_preset", {
+        "slot": 2, "spool_id": 1, "short_code": "acmePLA01",
+        "preset_name": "Acme PLA Basic Jet Black (3DFP acmePLA01)",
+        "name": "Acme PLA Basic Jet Black"}) in rig.events
     assert rig.patches() == [("/my/spools/acmePLA01",
                               {"location": "Printer: Bambu P2S, AMS: 1-2"})]
-    assert rig.events == [("cargobay_bound", {
+    assert [t for t, _ in rig.events] == ["cargobay_pick_preset", "cargobay_bound"]
+    assert bound_events(rig)[0] == {
         "slot": 2, "spool_id": 1, "short_code": "acmePLA01",
-        "name": "Acme PLA Basic Jet Black", "location_written": True})]
+        "name": "Acme PLA Basic Jet Black", "location_written": True}
     assert rig.env.store.bindings() == {2: 1}
     assert rig.binder.pending() is None  # consumed
     assert rig.binder.trays()[2]["empty"] is False
+
+
+async def test_ha_mode_calls_set_filament(rig_ha):
+    rig_ha.scan(1)
+    await rig_ha.load(2)
+    assert rig_ha.calls == [("bambu_lab", "set_filament", {
+        "entity_id": entity(2), "tray_info_idx": "GFL99", "tray_type": "PLA",
+        "tray_color": "1A1A1AFF", "nozzle_temp_min": 190, "nozzle_temp_max": 240})]
+    assert [t for t, _ in rig_ha.events] == ["cargobay_bound"]  # no pick_preset
+    assert rig_ha.env.store.bindings() == {2: 1}
 
 
 async def test_load_without_scan_asks(rig):
@@ -257,12 +280,13 @@ async def test_one_spool_one_tray(rig):
     out = await rig.binder.bind(1, 3, "manual")
     assert out["slot"] == 3 and out["spool_id"] == 1
     assert rig.env.store.bindings() == {3: 1}
-    assert [t for t, _ in rig.events] == ["cargobay_bound"]  # a move, not an unbind
+    # a move, not an unbind: pick_preset for the new spool, then bound
+    assert [t for t, _ in rig.events] == ["cargobay_pick_preset", "cargobay_bound"]
     rig.events.clear()
     await rig.binder.bind(3, 3, "manual")  # spool 3 takes slot 3 from spool 1
     assert rig.env.store.bindings() == {3: 3}
-    assert rig.events[0] == ("cargobay_unbound", {"slot": 3, "spool_id": 1,
-                                                  "short_code": "acmePLA01"})
+    assert ("cargobay_unbound", {"slot": 3, "spool_id": 1,
+                                 "short_code": "acmePLA01"}) in rig.events
     assert rig.env.store.last_unbound(1) == rig.env.now[0]
     rig.scan(1)  # the displaced spool is swap-safe like any unbound one
     assert rig.binder.pending() is None
@@ -284,7 +308,8 @@ async def test_bind_refuses_empty_or_unseen_tray(rig):
     assert rig.calls == [] and rig.reqs == [] and rig.env.store.bindings() == {}
 
 
-async def test_set_filament_failure_keeps_old_bindings(rig):
+async def test_set_filament_failure_keeps_old_bindings(rig_ha):
+    rig = rig_ha
     rig.scan(1)
     await rig.load(2)
     await rig.load(3)
@@ -322,7 +347,8 @@ async def test_bind_refuses_rfid_tray(rig):
     assert rig.calls == [] and rig.reqs == []
 
 
-async def test_set_filament_failure_aborts_before_3dfp(rig):
+async def test_set_filament_failure_aborts_before_3dfp(rig_ha):
+    rig = rig_ha
     rig.scan(1)
     rig.app[fake_ha.FAIL]["call_service"] = True
     await rig.load(2)
@@ -331,7 +357,8 @@ async def test_set_filament_failure_aborts_before_3dfp(rig):
     assert rig.env.store.bindings() == {} and rig.binder.pending() is None
 
 
-async def test_set_filament_failure_ask_is_best_effort(rig):
+async def test_set_filament_failure_ask_is_best_effort(rig_ha):
+    rig = rig_ha
     rig.scan(1)
     rig.app[fake_ha.FAIL]["call_service"] = True
     rig.app[fake_ha.FAIL]["fire_event"] = True
@@ -347,7 +374,8 @@ async def test_location_write_failure_still_binds(rig):
     assert bound_events(rig)[0]["location_written"] is False
 
 
-async def test_profile_missing_still_binds(rig):
+async def test_profile_missing_still_binds(rig_ha):
+    rig = rig_ha
     rig.binder.profiles = Profiles({}, [])
     rig.scan(1)
     await rig.load(2)
@@ -403,12 +431,10 @@ async def test_manual_bind_route(rig, api):
                        headers=api.h)
     assert r.status == 200
     assert await r.json() == {"slot": 3, "spool_id": 1, "location_written": True}
-    assert rig.calls == [("bambu_lab", "set_filament", {
-        "entity_id": entity(3), "tray_info_idx": "GFL99", "tray_type": "PLA",
-        "tray_color": "1A1A1AFF", "nozzle_temp_min": 190, "nozzle_temp_max": 240})]
+    assert rig.calls == []
     assert rig.patches() == [("/my/spools/acmePLA01",
                               {"location": "Printer: Bambu P2S, AMS: 1-3"})]
-    assert [t for t, _ in rig.events] == ["cargobay_bound"]
+    assert [t for t, _ in rig.events] == ["cargobay_pick_preset", "cargobay_bound"]
     n = len(rig.reqs)
     r = await api.post("/cargobay/bind", json={"spool_id": 1, "slot": 3})
     assert r.status == 401
@@ -435,13 +461,18 @@ async def test_manual_bind_route_errors(rig, api):
         r = await api.post("/cargobay/bind", json=body, headers=api.h)  # empty / Bambu
         assert r.status == 409, body
     assert rig.calls == []
-    rig.app[fake_ha.FAIL]["call_service"] = True
-    r = await api.post("/cargobay/bind", json={"spool_id": 1, "slot": 2}, headers=api.h)
-    assert r.status == 503 and rig.reqs == []
-    rig.app[fake_ha.FAIL].clear()
     rig.env.fake[FAIL_ONCE]["/my/spools/acmePLA01"] = (503, "unavailable")
     r = await api.post("/cargobay/bind", json={"spool_id": 1, "slot": 2}, headers=api.h)
     assert r.status == 200 and (await r.json())["location_written"] is False
+
+
+async def test_ha_bind_route_503_on_set_filament_failure(rig_ha, aiohttp_client):
+    c = await aiohttp_client(make_app(rig_ha.env.inventory, rig_ha.binder, rig_ha.env.options))
+    await rig_ha.load(2)
+    rig_ha.app[fake_ha.FAIL]["call_service"] = True
+    r = await c.post("/cargobay/bind", json={"spool_id": 1, "slot": 2},
+                     headers={"X-API-Key": "K"})
+    assert r.status == 503 and rig_ha.reqs == []
 
 
 async def test_manual_unbind_route(rig, api):

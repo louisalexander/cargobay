@@ -21,11 +21,13 @@ map:
 options:
   api_key: ""
   bind_window_s: 300
+  ams_control: notify
   extra_locations: []
   profile_overrides: []
 schema:
   api_key: password
   bind_window_s: int(30,3600)
+  ams_control: list(notify|ha_set_filament)
   extra_locations:
     - str
   profile_overrides:

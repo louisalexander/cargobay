@@ -14,10 +14,20 @@ the printer LaForge.
 **Read the design before any work:** `docs/superpowers/specs/2026-11-20-cargobay-design.md`.
 Its anti-goals (§2) are load-bearing — don't "improve" them away.
 
-Status (2026-11-21): design approved; implementation plan at
-`docs/superpowers/plans/2026-11-21-cargobay-v1.md` (M1+M2; HA side gets its own plan). No
-code yet. Scale parts ordered. `.local` spike passed on an ESP32-S3 (design §3), so the scale
-uses `http://homeassistant.local:7912`; the Eero DHCP reservation is now only a fallback.
+Status (2026-11-22): M1 built (PR #2, branch `feat/cargobay-v1`), installed live on HAOS
+from the branch (slug `d39ba24c_cargobay`). Live M2 in progress: 3dfp read/write, tag
+link, scan, HA sensors all verified. Scale parts still ordered (bench rehearsal uses curl
+as the scale + Flipper-read NTAG215 UIDs).
+
+**AMS control finding (design §5.3a):** the P2S blocks `bambu_lab.set_filament` in cloud
+mode ("requires mqtt encryption"), so binding now defaults to `ams_control: notify` — fire
+`cargobay_pick_preset` and the user picks the filament's 3dfp preset in Bambu Studio (full
+profile syncs to the AMS). `ha_set_filament` is the old direct path, for Developer Mode.
+Issue #3 tracks the AMS work.
+
+`.local` spike passed on an ESP32-S3 (design §3), so the scale uses
+`http://homeassistant.local:7912`; the Eero DHCP reservation is a fallback. Port 7912 is
+IPv4-only from the Mac (use `curl -4`).
 
 ## Sibling repos and external specs
 

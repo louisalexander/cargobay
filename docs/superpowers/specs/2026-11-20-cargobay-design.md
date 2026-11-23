@@ -34,8 +34,12 @@ The flow we want:
 - 3dfp is the **only** inventory of spools, filaments, weights and locations.
 - NFC tags (any NTAG/MIFARE UID) link to 3dfp spools; one spool may carry two tags.
 - Weighing on the scale writes an absolute `remaining_grams` to 3dfp.
-- Scan-then-load binds a spool to an AMS tray; the bridge calls ha-bambulab
-  `bambu_lab.set_filament` for that tray and writes the slot location to 3dfp.
+- Scan-then-load binds a spool to an AMS tray and writes the slot location to 3dfp.
+  How the tray's filament profile is set is the `ams_control` option (see §5.3a,
+  added 2026-11-22): default `notify` fires `cargobay_pick_preset` so the user picks
+  the filament's 3dfp preset in Bambu Studio; `ha_set_filament` calls ha-bambulab
+  `bambu_lab.set_filament` directly (only works on a printer that allows third-party
+  control).
 - Unloading a cargobay-bound tray releases the binding and shelves the spool in 3dfp.
 - Passes `check/check_inventory.py` (MUST items + 12–14) from SpoolmanScale-Integration.
 
@@ -218,6 +222,34 @@ cycle. Shared with `filament_sync.py` (~1 GET + ≤4 PATCH per print).
   (bound tray now empty or RFID → unbind silently).
 - Never bind across an HA reconnect glitch: `unavailable/unknown → loaded` is not a
   load event (same guard as `filament_sync_tray_change`).
+
+### 5.3a AMS control (`ams_control`, added 2026-11-22)
+
+The live M2 test found the P2S firmware **blocks** `bambu_lab.set_filament` in Bambu's
+normal (cloud) mode — HA logs `Printer firmware requires mqtt encryption. All control
+actions are blocked.`, yet the service call returns success, so step 5.3/2 above would
+record a bind that never reached the printer. Developer Mode would unblock it but is
+LAN-only (loses Bambu cloud/Handy) and, per Bambu, stops the printer receiving newly
+created custom presets. Signing commands with the leaked Bambu Connect key was
+considered and rejected.
+
+So step 5.3/2 is governed by the `ams_control` option:
+
+- **`notify`** (default): instead of calling `set_filament`, fire
+  `cargobay_pick_preset {slot, spool_id, short_code, name, preset_name}`, where
+  `preset_name` is the filament's 3dfp Bambu Studio export name
+  (`<brand> <name> (3DFP <short_code>)`, e.g. `SUNLU PETG 2.0 Peach Pink
+  (3DFP mixpNyX3T)`). The user imports that preset once from 3dfp (it syncs to their
+  Bambu account), and an HA automation turns the event into a notification; the user
+  picks the preset in Bambu Studio → Device. This keeps the printer in cloud mode and
+  carries the **full** tested profile (temps, fans, speeds), not just material+colour.
+  Best-effort: a failed event never aborts the bind (the binding + 3dfp location still
+  commit).
+- **`ha_set_filament`**: the original step 5.3/2 path, for a printer that accepts
+  third-party control (LAN-only Developer Mode, or older firmware). A raised `HAError`
+  still aborts the bind before any binding is released.
+
+Steps 5.3/1, 5.3/3, 5.3/4 are unchanged in both modes.
 
 ### 5.4 HA side (lives in the `homeassistant` repo; in v1 scope, its own PR)
 

@@ -33,6 +33,12 @@ def _int(v) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+def preset_name(r: Remote) -> str:
+    """The name 3dfp's Bambu Studio export gives a spool's filament preset:
+    ``<brand> <name> (3DFP <short_code>)``. The user picks this in Studio -> Device."""
+    return " ".join(f"{r.brand} {r.name}".split()) + f" (3DFP {r.short_code})"
+
+
 def to_remote(item: dict) -> Remote:
     brand = _text(item.get("brand"))
     material = _text(item.get("material"))

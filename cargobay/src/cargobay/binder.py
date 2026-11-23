@@ -13,6 +13,7 @@ from typing import Literal
 from .config import Options
 from .ha import HA, HAError, slot_of, tray_entities
 from .inventory import Inventory, Refused, Upstream, slot_location
+from .mapping import preset_name
 from .profiles import Profiles
 from .store import Store, normalise_uid
 
@@ -172,13 +173,23 @@ class Binder:
         # released only once the printer took the profile, so an HA failure keeps them
         release = {s: sid for s, sid in self.store.bindings().items()
                    if s == slot or sid == spool_id}
-        profile = self.profiles.for_remote(r)
-        if profile is None:
-            await self.ha.fire_event("cargobay_profile_missing",
-                                     {"slot": slot, "material": r.material})
+        if self.options.ams_control == "ha_set_filament":
+            # Direct AMS control. The P2S blocks this in cloud mode; a raised HAError
+            # aborts the bind here, before any binding is released (see comment above).
+            profile = self.profiles.for_remote(r)
+            if profile is None:
+                await self.ha.fire_event("cargobay_profile_missing",
+                                         {"slot": slot, "material": r.material})
+            else:
+                await self.ha.call_service(
+                    "bambu_lab", "set_filament",
+                    {"entity_id": tray_entities[slot - 1], **profile.data()})
         else:
-            await self.ha.call_service("bambu_lab", "set_filament",
-                                       {"entity_id": tray_entities[slot - 1], **profile.data()})
+            # notify: cloud-mode printers reject third-party control, so ask the user to
+            # pick the 3dfp preset in Bambu Studio -> Device. Best-effort; never aborts.
+            await self._fire("cargobay_pick_preset", {
+                "slot": slot, "spool_id": spool_id, "short_code": r.short_code,
+                "preset_name": preset_name(r), "name": f"{r.brand} {r.name}".strip()})
         for s in release:
             self.store.clear_binding(s)
         displaced = release.get(slot)

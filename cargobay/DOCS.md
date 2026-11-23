@@ -10,12 +10,14 @@ the spool's filament profile, and 3dfp gets the weight and slot location.
 |---|---|
 | `api_key` | Shared secret the scale sends as `X-API-Key` (required). |
 | `bind_window_s` | Seconds (30-3600, default 300) a scan stays eligible to bind to the next loaded tray. |
+| `ams_control` | How a bind sets the AMS slot's filament. `notify` (default) fires a `cargobay_pick_preset` event so an automation can tell you which 3dfp preset to pick in Bambu Studio -> Device; `ha_set_filament` calls `bambu_lab.set_filament` directly. See **AMS control** below. |
 | `extra_locations` | Extra 3dfp location names to offer. |
-| `profile_overrides` | Per-filament Bambu profile overrides. |
+| `profile_overrides` | Per-filament Bambu profile overrides (used only by `ha_set_filament`). |
 
 ```yaml
 api_key: "choose-a-long-random-string"
 bind_window_s: 300
+ams_control: notify
 extra_locations:
   - "Shelf: Office Supply Closet"
 profile_overrides:
@@ -42,6 +44,25 @@ for one filament:
   come from the built-in generic table entry for `tray_info_idx`, or, if that id is
   not in the table, from the generic profile for the spool's material.
 
+### AMS control
+
+When a spool is bound to a tray, the filament profile the printer uses for that slot is
+set one of two ways:
+
+- **`notify` (default).** The add-on fires `cargobay_pick_preset` with the slot and the
+  name of the filament's 3dfp preset (for example
+  `SUNLU PETG 2.0 Peach Pink (3DFP mixpNyX3T)`). You import that preset once from the
+  filament's page on 3dfp (its Bambu Studio export) so it syncs to your Bambu account,
+  then an automation turns the event into a notification and you pick the preset in
+  Bambu Studio -> Device. This is the only path that works while the printer stays in
+  Bambu's normal (cloud) mode, which blocks third-party control of the AMS, and it
+  carries the full tested profile (temperatures, fans, speeds), not just a material and
+  colour.
+- **`ha_set_filament`.** The add-on calls `bambu_lab.set_filament` to set the slot to a
+  generic Bambu profile (optionally refined by `profile_overrides`). This needs a printer
+  that accepts third-party control, e.g. in LAN-only Developer Mode; on a cloud-mode
+  printer the call is rejected by firmware.
+
 ## Scale setup
 
 In the SpoolmanScale, set the base URL to `http://homeassistant.local:7912` and the
@@ -58,7 +79,11 @@ it the add-on runs read-only from its cached snapshot.
 ## Events
 
 Fired on the Home Assistant event bus: `cargobay_bound`, `cargobay_unbound`,
-`cargobay_unbound_load`, `cargobay_profile_missing`, `cargobay_quota_low`.
+`cargobay_unbound_load`, `cargobay_pick_preset`, `cargobay_profile_missing`,
+`cargobay_quota_low`.
+
+`cargobay_pick_preset` (ams_control `notify`) carries `slot`, `spool_id`, `short_code`,
+`name`, and `preset_name` (the exact Bambu Studio preset to pick for that slot).
 
 ## Sensors
 
