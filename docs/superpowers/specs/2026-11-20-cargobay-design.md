@@ -1,6 +1,6 @@
 # Cargo Bay — design
 
-_2026-11-20. Status: draft for approval._
+_2026-11-20. Status: approved 2026-11-21 (owner). §3/§6 updated 2026-11-21 with the `.local` spike result._
 
 Cargo Bay is a bridge that lets an off-the-shelf **SpoolmanScale** (ESP32 filament
 scale with NFC) run against **3dfilamentprofiles.com (3dfp)** as its inventory, and
@@ -34,8 +34,12 @@ The flow we want:
 - 3dfp is the **only** inventory of spools, filaments, weights and locations.
 - NFC tags (any NTAG/MIFARE UID) link to 3dfp spools; one spool may carry two tags.
 - Weighing on the scale writes an absolute `remaining_grams` to 3dfp.
-- Scan-then-load binds a spool to an AMS tray; the bridge calls ha-bambulab
-  `bambu_lab.set_filament` for that tray and writes the slot location to 3dfp.
+- Scan-then-load binds a spool to an AMS tray and writes the slot location to 3dfp.
+  How the tray's filament profile is set is the `ams_control` option (see §5.3a,
+  added 2026-11-22): default `notify` fires `cargobay_pick_preset` so the user picks
+  the filament's 3dfp preset in Bambu Studio; `ha_set_filament` calls ha-bambulab
+  `bambu_lab.set_filament` directly (only works on a printer that allows third-party
+  control).
 - Unloading a cargobay-bound tray releases the binding and shelves the spool in 3dfp.
 - Passes `check/check_inventory.py` (MUST items + 12–14) from SpoolmanScale-Integration.
 
@@ -81,9 +85,15 @@ The flow we want:
   `filament_id`, `color`, `remain`, `remain_enabled`, `tray_weight`, `name`, `empty`.
   Action `bambu_lab.set_filament(entity_id, tray_info_idx, tray_color RRGGBBAA,
   tray_type, nozzle_temp_min, nozzle_temp_max)`.
-- **HAOS DHCP churn.** The box's LAN IP changes on reboot; the scale's ESP32 HTTP
-  client is not known to resolve `.local`. The scale needs a stable address for the
-  add-on (§6).
+- **HAOS DHCP churn.** The box's LAN IP changes on reboot, so the scale must not be
+  given an IP. **`.local` spike (2026-11-21):** a Freenove ESP32-S3 on SpoolmanScale
+  v0.8.3's exact platform pin (pioarduino 55.03.312-1 → Arduino core 3.3.12, IDF
+  v5.5.5) on the house Eero network: the core ships with
+  `CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y`; `WiFi.hostByName("homeassistant.local")`
+  resolves (≈215 ms cold) and `HTTPClient` `GET http://homeassistant.local:8123/` →
+  200, both with and without an mDNS responder running on the board (the scale runs
+  one by default). The firmware resolves hosts with `WiFi.hostByName`
+  (`src/web/web_access.cpp`). Not yet confirmed on the real WT32-SC01 Plus (§7a M3).
 
 ## 4. Approaches considered
 
@@ -213,6 +223,34 @@ cycle. Shared with `filament_sync.py` (~1 GET + ≤4 PATCH per print).
 - Never bind across an HA reconnect glitch: `unavailable/unknown → loaded` is not a
   load event (same guard as `filament_sync_tray_change`).
 
+### 5.3a AMS control (`ams_control`, added 2026-11-22)
+
+The live M2 test found the P2S firmware **blocks** `bambu_lab.set_filament` in Bambu's
+normal (cloud) mode — HA logs `Printer firmware requires mqtt encryption. All control
+actions are blocked.`, yet the service call returns success, so step 5.3/2 above would
+record a bind that never reached the printer. Developer Mode would unblock it but is
+LAN-only (loses Bambu cloud/Handy) and, per Bambu, stops the printer receiving newly
+created custom presets. Signing commands with the leaked Bambu Connect key was
+considered and rejected.
+
+So step 5.3/2 is governed by the `ams_control` option:
+
+- **`notify`** (default): instead of calling `set_filament`, fire
+  `cargobay_pick_preset {slot, spool_id, short_code, name, preset_name}`, where
+  `preset_name` is the filament's 3dfp Bambu Studio export name
+  (`<brand> <name> (3DFP <short_code>)`, e.g. `SUNLU PETG 2.0 Peach Pink
+  (3DFP mixpNyX3T)`). The user imports that preset once from 3dfp (it syncs to their
+  Bambu account), and an HA automation turns the event into a notification; the user
+  picks the preset in Bambu Studio → Device. This keeps the printer in cloud mode and
+  carries the **full** tested profile (temps, fans, speeds), not just material+colour.
+  Best-effort: a failed event never aborts the bind (the binding + 3dfp location still
+  commit).
+- **`ha_set_filament`**: the original step 5.3/2 path, for a printer that accepts
+  third-party control (LAN-only Developer Mode, or older firmware). A raised `HAError`
+  still aborts the bind before any binding is released.
+
+Steps 5.3/1, 5.3/3, 5.3/4 are unchanged in both modes.
+
 ### 5.4 HA side (lives in the `homeassistant` repo; in v1 scope, its own PR)
 
 - Cargo Bay publishes `sensor.cargobay_spools` over the websocket (state = count,
@@ -233,8 +271,9 @@ cycle. Shared with `filament_sync.py` (~1 GET + ≤4 PATCH per print).
   Settings → Add-ons → Repositories.
 - Port `7912/tcp` mapped on the host. Options: `api_key` (scale's `X-API-Key`),
   `bind_window_s`, profile overrides. HA access via `homeassistant_api: true`.
-- **Stable address for the scale:** a DHCP reservation for the HAOS box on the Eero
-  (already recommended in CLAUDE.md). Scale base URL `http://<reserved-ip>:7912`.
+- **Stable address for the scale:** base URL `http://homeassistant.local:7912`
+  (mDNS; §3 spike). Fallback if `.local` proves flaky on the real scale: an Eero DHCP
+  reservation for the HAOS box and `http://<reserved-ip>:7912`.
 - Updates: bump `version` in `config.yaml`, push, update in the add-on store.
 
 ## 7. Testing
@@ -257,8 +296,9 @@ cycle. Shared with `filament_sync.py` (~1 GET + ≤4 PATCH per print).
    checker (read-only mode first, then `--write` on two spare spools) and with curl
    standing in for scan/measure; real scan-then-load on a real tray; HA picker PR.
 3. **Hardware** (gated on parts arriving): order list §8, print the enclosure, flash via
-   the SpoolmanScale web flasher, Eero DHCP reservation for HAOS, point the scale at
-   Cargo Bay, end-to-end test. v1 is done only after this.
+   the SpoolmanScale web flasher, point the scale at Cargo Bay on
+   `homeassistant.local:7912` (Eero DHCP reservation only if `.local` is flaky),
+   end-to-end test. v1 is done only after this.
 
 ## 8. Hardware (order list)
 

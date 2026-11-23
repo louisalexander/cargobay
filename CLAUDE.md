@@ -14,9 +14,20 @@ the printer LaForge.
 **Read the design before any work:** `docs/superpowers/specs/2026-11-20-cargobay-design.md`.
 Its anti-goals (§2) are load-bearing — don't "improve" them away.
 
-Status (2026-11-20): design drafted, awaiting owner approval → then an implementation
-plan (`docs/superpowers/plans/`). No code yet. Scale hardware not bought; milestones in
-design §7a (bridge first against fakes, hardware last).
+Status (2026-11-22): M1 built (PR #2, branch `feat/cargobay-v1`), installed live on HAOS
+from the branch (slug `d39ba24c_cargobay`). Live M2 in progress: 3dfp read/write, tag
+link, scan, HA sensors all verified. Scale parts still ordered (bench rehearsal uses curl
+as the scale + Flipper-read NTAG215 UIDs).
+
+**AMS control finding (design §5.3a):** the P2S blocks `bambu_lab.set_filament` in cloud
+mode ("requires mqtt encryption"), so binding now defaults to `ams_control: notify` — fire
+`cargobay_pick_preset` and the user picks the filament's 3dfp preset in Bambu Studio (full
+profile syncs to the AMS). `ha_set_filament` is the old direct path, for Developer Mode.
+Issue #3 tracks the AMS work.
+
+`.local` spike passed on an ESP32-S3 (design §3), so the scale uses
+`http://homeassistant.local:7912`; the Eero DHCP reservation is a fallback. Port 7912 is
+IPv4-only from the Mac (use `curl -4`).
 
 ## Sibling repos and external specs
 
@@ -46,7 +57,7 @@ design §7a (bridge first against fakes, hardware last).
 - Bambu reel identity is `tray_uuid` (shared by its two tags), not `tag_uid`.
   Third-party trays report `remain = -1` and an empty/zero `tray_uuid`.
 - HAOS is at `homeassistant.local` / `ssh haos` (root, `~/.ssh/haos_deploy`). **Never
-  hardcode its LAN IP** — DHCP changes it every reboot (an Eero reservation is planned).
+  hardcode its LAN IP** — DHCP changes it every reboot (Eero reservation is a fallback; see design §3/§6).
 - A reconnect `unavailable/unknown → real` on a tray sensor is not a load event.
 
 ## Working conventions (owner's standing rules)
