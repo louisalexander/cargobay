@@ -1,6 +1,6 @@
 name: Cargo Bay
 slug: cargobay
-version: "0.1.1"
+version: "0.1.2"
 description: Spoolman-style API for SpoolmanScale backed by 3dfilamentprofiles.com, bound to Bambu AMS trays
 url: https://github.com/louisalexander/cargobay
 arch:

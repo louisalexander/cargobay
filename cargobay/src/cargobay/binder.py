@@ -187,9 +187,11 @@ class Binder:
         else:
             # notify: cloud-mode printers reject third-party control, so ask the user to
             # pick the 3dfp preset in Bambu Studio -> Device. Best-effort; never aborts.
+            pname = preset_name(r)
+            log.info("pick preset for slot %d: %s", slot, pname)
             await self._fire("cargobay_pick_preset", {
                 "slot": slot, "spool_id": spool_id, "short_code": r.short_code,
-                "preset_name": preset_name(r), "name": f"{r.brand} {r.name}".strip()})
+                "preset_name": pname, "name": f"{r.brand} {r.name}".strip()})
         for s in release:
             self.store.clear_binding(s)
         displaced = release.get(slot)
